@@ -36,6 +36,30 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@0723195856401067f7a2779048b490ace7a47d7c # v5
 
+      - name: Restore stable debug signing key for trusted builds
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        env:
+          DEBUG_KEYSTORE_B64: ${{ secrets.ANDROID_DEBUG_KEYSTORE }}
+        run: |
+          if [ -z "$DEBUG_KEYSTORE_B64" ]; then
+            echo "::error::Configure the ANDROID_DEBUG_KEYSTORE repository secret before building."
+            exit 1
+          fi
+          umask 077
+          mkdir -p "$HOME/.android"
+          printf '%s' "$DEBUG_KEYSTORE_B64" | base64 --decode > "$HOME/.android/debug.keystore"
+          certificate=$(keytool -exportcert -keystore "$HOME/.android/debug.keystore" -storepass android -alias androiddebugkey | sha256sum | cut -d ' ' -f1)
+          if [ "$certificate" != "68ab9363b968fda9b4623153b32ea4de756d75e5a2582786c18e493abe8123ed" ]; then
+            echo "::error::The debug signing certificate does not match the Pixel development build."
+            exit 1
+          fi
+
+      - name: Explain isolated fork signing
+        if: github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository
+        run: |
+          echo "::warning::Fork PRs cannot access the stable debug key. This APK uses an isolated runner key and cannot update a Pixel development install in place."
+          echo "Fork PR: isolated debug signing; this APK cannot update the regular development install in place." >> "$GITHUB_STEP_SUMMARY"
+
       - name: Build APK, run unit tests and lint
         run: bash ./gradlew :app:assembleDebug :app:testDebugUnitTest :app:lintDebug --max-workers=2 --no-daemon
 
@@ -67,3 +91,7 @@ jobs:
             app/build/test-results/testDebugUnitTest/
           if-no-files-found: warn
           retention-days: 30
+
+      - name: Remove runner debug signing key
+        if: always()
+        run: rm -f "$HOME/.android/debug.keystore"

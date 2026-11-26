@@ -96,6 +96,7 @@ class FixtureScreensTest {
     }
 
     @Test fun populatedScreensPreserveQuoteAndShowFailedRefresh() {
+        store.putString("appTheme", "Dark")
         runBlocking { store.add(store.lookup("FIXT")) }
         showApp()
         compose.onNodeWithText("FIXT").assertExists()
@@ -103,6 +104,7 @@ class FixtureScreensTest {
 
         compose.onNodeWithText("FIXT").performClick()
         compose.onNodeWithText("Fixture Company").assertExists()
+        screenshot("dark-detail")
         compose.onNodeWithText("Stock price time: ${dateTime(quote.quoteTime)}").assertExists()
         screenshot("detail")
 
@@ -110,6 +112,16 @@ class FixtureScreensTest {
         compose.onNodeWithText("Fixture Company").assertExists()
         compose.onNodeWithText("123.45 USD").assertExists()
         screenshot("preview")
+        compose.onNodeWithText("Wide").performClick()
+        screenshot("dark-wide")
+        compose.onAllNodesWithText("Watchlist").onFirst().performClick()
+        screenshot("dark-tall")
+        compose.onNodeWithText("Compact").performClick()
+        compose.onNodeWithText("Data").performClick()
+        screenshot("dark-data")
+        compose.onNodeWithText("Settings").performClick()
+        screenshot("dark-settings")
+        compose.onNodeWithText("Widgets").performClick()
 
         failRefresh = true
         val result = runBlocking { store.refresh() }
@@ -128,10 +140,16 @@ class FixtureScreensTest {
     }
 
     @Test fun emptyDataOffersFollowAction() {
+        store.putString("appTheme", "Dark")
         showApp()
+        screenshot("dark-welcome")
+        compose.onNodeWithText("Watchlist").performClick()
+        screenshot("empty-watchlist")
         compose.onNodeWithText("Data").performClick()
+        screenshot("empty-data")
         compose.onNodeWithText("Follow a stock").performScrollTo().performClick()
         compose.onNodeWithText("Find your next perspective.").assertExists()
+        screenshot("dark-add-empty")
     }
 
     @Test fun lightDesignAndAllPreviewLayouts() {
@@ -143,6 +161,8 @@ class FixtureScreensTest {
         }
         showApp()
         screenshot("light-watchlist")
+        compose.onNodeWithText("FIXT").performClick()
+        screenshot("light-detail")
         compose.onNodeWithText("Data").performClick()
         check(compose.onAllNodesWithText("Stock price time: ${dateTime(quote.quoteTime)}").fetchSemanticsNodes().size == 3)
         screenshot("light-data")
@@ -153,6 +173,8 @@ class FixtureScreensTest {
         compose.onNodeWithText("Wide").assertExists()
         compose.onAllNodesWithText("Watchlist").onFirst().performClick()
         screenshot("light-tall")
+        compose.onNodeWithText("Add to home screen ↗").performScrollTo()
+        screenshot("light-widget-controls")
         compose.onNodeWithText("Settings").performClick()
         screenshot("light-settings")
     }
@@ -167,11 +189,16 @@ class FixtureScreensTest {
     }
 
     @Test fun exactLookupCanBeSavedAndReopenedWithoutTouchingProductionCache() {
+        store.putString("appTheme", "Light")
         showApp()
+        screenshot("light-welcome")
         compose.onNodeWithText("Choose your first stock").performClick()
+        screenshot("light-add-empty")
         compose.onNodeWithText("Symbol").performTextInput("FIXT")
         compose.onNodeWithText("Look up").performClick()
-        compose.onNodeWithText("+ Add to watchlist").performScrollTo().performClick()
+        compose.onNodeWithText("+ Add to watchlist").performScrollTo()
+        screenshot("light-add-verified")
+        compose.onNodeWithText("+ Add to watchlist").performClick()
         compose.onNodeWithText("FIXT").assertExists()
         check(Store(context, provider, preferenceName).entries.value.single().quote == quote)
     }

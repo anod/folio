@@ -8,6 +8,10 @@ Every pull request runs the **Android APK** workflow: it builds a debug APK, run
 
 These APKs are debug-signed test builds, not production releases. Only install builds from PR authors and changes you trust. CI does not run device tests or request live quotes. It also runs on pushes to `main` and can be started manually from **Actions**.
 
+Trusted repository builds reuse the Pixel development debug certificate, so their APKs update the development install without resetting watchlist/preferences. The keystore is stored only in the encrypted `ANDROID_DEBUG_KEYSTORE` Actions secret (base64-encoded standard Android debug keystore), never in Git or APK artifacts, and is removed from the runner after each job. Missing or mismatched secrets fail trusted builds explicitly. This is a debug key, not a release signing key.
+
+Fork PRs never receive that secret and use an isolated runner debug key instead, with a warning in the run summary. Their APKs cannot update the regular development install in place. Do not switch to `pull_request_target` to expose signing secrets to fork code.
+
 ## Build
 
 Install JDK 17 or newer and Android SDK platform 36. Set `ANDROID_HOME` or create `local.properties` with `sdk.dir`. On Windows:
