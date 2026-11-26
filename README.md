@@ -2,6 +2,12 @@
 
 Native Android stock watchlist and home-screen widget. Quotes are fetched directly from the unofficial Yahoo chart endpoint; no account or backend is required. The provider receives requested symbols and the device IP address. Data may be delayed or unavailable, and use of the endpoint is subject to the provider's terms.
 
+## Download a PR APK
+
+Every pull request runs the **Android APK** workflow: it builds a debug APK, runs unit tests and lint, and uploads `folio-debug-<PR number>`. Open the PR's **Checks**, select **Build debug APK and check**, then follow **Download APK artifact** in the run summary (or select the artifact under **Artifacts**). Sign in to GitHub to download the ZIP, extract `app-debug.apk`, and install it on Android 8.0 or newer. Artifacts expire after 30 days; a rerun creates a new download.
+
+These APKs are debug-signed test builds, not production releases. Only install builds from PR authors and changes you trust. CI does not run device tests or request live quotes. It also runs on pushes to `main` and can be started manually from **Actions**.
+
 ## Build
 
 Install JDK 17 or newer and Android SDK platform 36. Set `ANDROID_HOME` or create `local.properties` with `sdk.dir`. On Windows:
