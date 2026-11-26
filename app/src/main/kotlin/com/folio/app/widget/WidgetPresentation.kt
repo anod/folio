@@ -1,7 +1,9 @@
 package com.folio.app.widget
 
 import com.folio.app.market.Entry
+import com.folio.app.market.TradingStatus
 import com.folio.app.market.changeText
+import com.folio.app.market.tradingStatus
 import com.folio.app.market.number
 import com.folio.app.market.signed
 import org.json.JSONArray
@@ -16,7 +18,7 @@ fun widgetDateTime(value: Long?): String = value?.let {
 
 data class WidgetConfig(
     val symbols: List<String>,
-    val theme: String = "Graphite",
+    val theme: String = "System",
     val opacity: Int = 100,
 ) {
     fun encode(): String = JSONObject().put("symbols", JSONArray(symbols.distinct()))
@@ -28,7 +30,7 @@ data class WidgetConfig(
             val a = o.getJSONArray("symbols")
             return WidgetConfig(
                 (0 until a.length()).map { a.getString(it) }.distinct(),
-                o.optString("theme", "Graphite").takeIf { it in listOf("Graphite", "Sage", "Paper") } ?: "Graphite",
+                o.optString("theme", "System").takeIf { it in listOf("System", "Graphite", "Sage", "Paper") } ?: "System",
                 o.optInt("opacity", 100).coerceIn(35, 100),
             )
         }
@@ -58,11 +60,17 @@ data class WidgetRowData(
     val lastAttempt: String?,
     val points: List<Double>,
     val negative: Boolean,
+    val trading: TradingStatus = TradingStatus.UNKNOWN,
 )
 
 data class WidgetPresentation(val layout: WidgetLayout, val rows: List<WidgetRowData>)
 
-fun presentWidget(config: WidgetConfig, entries: List<Entry>, layout: WidgetLayout): WidgetPresentation {
+fun presentWidget(
+    config: WidgetConfig,
+    entries: List<Entry>,
+    layout: WidgetLayout,
+    now: Long = System.currentTimeMillis(),
+): WidgetPresentation {
     val bySymbol = entries.associateBy { it.symbol }
     val rows = config.symbols.mapNotNull { bySymbol[it] }.map { entry ->
         val q = entry.quote
@@ -84,6 +92,7 @@ fun presentWidget(config: WidgetConfig, entries: List<Entry>, layout: WidgetLayo
             if (entry.outcome != null && entry.outcome != "Success") "Attempt: ${widgetDateTime(entry.attemptedAt)}" else null,
             q?.points ?: emptyList(),
             (q?.change ?: 0.0) < 0,
+            tradingStatus(q, now),
         )
     }
     return WidgetPresentation(layout, if (layout == WidgetLayout.WATCHLIST) rows.take(4) else rows.take(1))

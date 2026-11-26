@@ -18,6 +18,7 @@ import androidx.core.view.WindowCompat
 import androidx.glance.appwidget.GlanceAppWidgetManager
 import com.folio.app.market.Refresh
 import com.folio.app.market.Store
+import com.folio.app.market.scheduleTradingStatus
 import com.folio.app.ui.theme.FolioTheme
 import com.folio.app.ui.WidgetDesigner
 import kotlinx.coroutines.launch
@@ -72,6 +73,7 @@ class WidgetConfigActivity : ComponentActivity() {
                         scope.launch {
                             val glanceId = GlanceAppWidgetManager(this@WidgetConfigActivity).getGlanceIdBy(id)
                             FolioWidget().update(this@WidgetConfigActivity, glanceId)
+                            scheduleTradingStatus(this@WidgetConfigActivity)
                             Refresh.schedule(this@WidgetConfigActivity, store.getString("interval", "15").toLong())
                             setResult(Activity.RESULT_OK, Intent().putExtra(AppWidgetManager.EXTRA_APPWIDGET_ID, id))
                             finish()

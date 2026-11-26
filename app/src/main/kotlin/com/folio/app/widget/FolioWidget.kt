@@ -14,6 +14,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.graphics.toArgb
 import androidx.glance.GlanceId
 import androidx.glance.GlanceModifier
 import androidx.glance.Image
@@ -49,6 +50,7 @@ import androidx.glance.unit.ColorProvider
 import com.folio.app.MainActivity
 import com.folio.app.market.Refresh
 import com.folio.app.market.Store
+import com.folio.app.market.TradingStatus
 import com.folio.app.market.chartFractions
 
 class FolioWidget : GlanceAppWidget() {
@@ -56,13 +58,15 @@ class FolioWidget : GlanceAppWidget() {
     override suspend fun provideGlance(context: Context, id: GlanceId) {
         val appId = GlanceAppWidgetManager(context).getAppWidgetId(id)
         val store = Store.get(context)
+        store.tick()
         provideContent {
             val entries by store.entries.collectAsState()
+            val now by store.clock.collectAsState()
             val config by remember(appId) { store.observeWidgetConfig(appId) }.collectAsState(initial = store.widgetConfig(appId))
             val size = LocalSize.current
             val layout = if (size.height >= 320.dp && size.width >= 220.dp) WidgetLayout.WATCHLIST
                 else if (size.width >= 220.dp) WidgetLayout.WIDE else WidgetLayout.COMPACT
-            WidgetContent(context, appId, presentWidget(config, entries, layout), config)
+            WidgetContent(context, appId, presentWidget(config, entries, layout, now), config)
         }
     }
 }
@@ -89,19 +93,15 @@ class RefreshAction : ActionCallback {
     }
 }
 
-private val lightText = ColorProvider(androidx.compose.ui.graphics.Color(0xfff1f6e8))
-private val darkText = ColorProvider(androidx.compose.ui.graphics.Color(0xff263723))
-
 @Composable
 internal fun WidgetContent(context: Context, appId: Int, presentation: WidgetPresentation, config: WidgetConfig) {
-    val light = config.theme != "Graphite"
-    val fg = if (light) darkText else lightText
-    val bg = if (config.theme == "Sage") 0xffe2edcf else if (light) 0xfff5f3eb else 0xff1b2923
-    val muted = ColorProvider(androidx.compose.ui.graphics.Color(if (light) 0xff687a5f else 0xff9bad9f))
-    val iconColor = if (light) 0xff506e37.toInt() else 0xffc9ef9a.toInt()
-    val background = remember(config.theme, config.opacity) {
+    val colors = widgetColors(context, config.theme)
+    val fg = ColorProvider(colors.text)
+    val muted = ColorProvider(colors.muted)
+    val iconColor = colors.accent.toArgb()
+    val background = remember(colors.background, config.opacity) {
         Bitmap.createBitmap(1, 1, Bitmap.Config.ARGB_8888).apply {
-            eraseColor((bg.toInt() and 0x00ffffff) or ((config.opacity * 255 / 100) shl 24))
+            eraseColor((colors.background.toArgb() and 0x00ffffff) or ((config.opacity * 255 / 100) shl 24))
         }
     }
     val corner = if (android.os.Build.VERSION.SDK_INT >= 31)
@@ -123,19 +123,23 @@ internal fun WidgetContent(context: Context, appId: Int, presentation: WidgetPre
             Text("Your watchlist", style = TextStyle(color = fg, fontSize = 12.sp, fontWeight = FontWeight.Bold),
                 modifier = GlanceModifier.clickable(actionStartActivity<MainActivity>()))
             val visibleCount = ((LocalSize.current.height.value - 85) / 76).toInt().coerceIn(1, 4)
-            presentation.rows.take(visibleCount).forEach { WidgetRow(context, appId, it, fg, muted, light) }
+            presentation.rows.take(visibleCount).forEach { WidgetRow(context, appId, it, colors) }
         } else {
-            val accent = marketAccent(row, light)
+            val accent = (if (row.negative) colors.negative else colors.accent).toArgb()
             Column(GlanceModifier.fillMaxWidth().clickable(actionStartActivityIntent(detailIntent(context, appId, row.symbol)))) {
                 if (presentation.layout == WidgetLayout.WIDE) {
                     Row(GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.Vertical.CenterVertically) {
+                        TradingDot(row, colors)
                         Text(row.symbol, style = TextStyle(color = fg, fontSize = 12.sp, fontWeight = FontWeight.Bold), maxLines = 1)
                         Text(" / ${row.name}", modifier = GlanceModifier.defaultWeight(),
                             style = TextStyle(color = muted, fontSize = 10.sp), maxLines = 1)
                         row.exchange?.let { Text(it, style = TextStyle(color = muted, fontSize = 9.sp), maxLines = 1) }
                     }
                 } else {
-                    Text(row.symbol, style = TextStyle(color = fg, fontSize = 12.sp, fontWeight = FontWeight.Bold), maxLines = 1)
+                    Row(GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.Vertical.CenterVertically) {
+                        TradingDot(row, colors)
+                        Text(row.symbol, style = TextStyle(color = fg, fontSize = 12.sp, fontWeight = FontWeight.Bold), maxLines = 1)
+                    }
                     Text(row.name, style = TextStyle(color = muted, fontSize = 10.sp), maxLines = 1)
                 }
                 Spacer(GlanceModifier.height(8.dp))
@@ -180,12 +184,17 @@ internal fun WidgetContent(context: Context, appId: Int, presentation: WidgetPre
 }
 
 @Composable
-private fun WidgetRow(context: Context, appId: Int, row: WidgetRowData, fg: ColorProvider, muted: ColorProvider, light: Boolean) {
-    val accent = marketAccent(row, light)
+private fun WidgetRow(context: Context, appId: Int, row: WidgetRowData, colors: WidgetColors) {
+    val fg = ColorProvider(colors.text)
+    val muted = ColorProvider(colors.muted)
+    val accent = (if (row.negative) colors.negative else colors.accent).toArgb()
     Column(GlanceModifier.fillMaxWidth().clickable(actionStartActivityIntent(detailIntent(context, appId, row.symbol))).padding(vertical = 3.dp)) {
         Row(GlanceModifier.fillMaxWidth(), verticalAlignment = Alignment.Vertical.CenterVertically) {
             Column(GlanceModifier.defaultWeight()) {
-                Text(row.symbol, style = TextStyle(color = fg, fontSize = 11.sp, fontWeight = FontWeight.Bold), maxLines = 1)
+                Row(verticalAlignment = Alignment.Vertical.CenterVertically) {
+                    TradingDot(row, colors)
+                    Text(row.symbol, style = TextStyle(color = fg, fontSize = 11.sp, fontWeight = FontWeight.Bold), maxLines = 1)
+                }
                 Text(row.name, style = TextStyle(color = muted, fontSize = 9.sp), maxLines = 1)
             }
             if (row.points.size > 1)
@@ -199,9 +208,22 @@ private fun WidgetRow(context: Context, appId: Int, row: WidgetRowData, fg: Colo
         Text(row.quoteTime, style = TextStyle(color = muted, fontSize = 9.sp), maxLines = 1)
         Text(row.fetchedAt, style = TextStyle(color = muted, fontSize = 9.sp), maxLines = 1)
         row.status?.let { Text(it, style = TextStyle(color = muted, fontSize = 9.sp), maxLines = 1) }
-        Spacer(GlanceModifier.fillMaxWidth().height(1.dp).background(ColorProvider(
-            androidx.compose.ui.graphics.Color(if (light) 0xffcbd9bd else 0xff35443a))))
+        Spacer(GlanceModifier.fillMaxWidth().height(1.dp).background(ColorProvider(colors.divider)))
     }
+}
+
+@Composable
+private fun TradingDot(row: WidgetRowData, colors: WidgetColors) {
+    val color = colors.tradingDot(row.trading == TradingStatus.ACTIVE).toArgb()
+    Image(ImageProvider(statusDot(color)), contentDescription = row.trading.description,
+        modifier = GlanceModifier.width(7.dp).height(7.dp))
+    Spacer(GlanceModifier.width(5.dp))
+}
+
+internal fun statusDot(color: Int): Bitmap {
+    val bitmap = Bitmap.createBitmap(28, 28, Bitmap.Config.ARGB_8888)
+    Canvas(bitmap).drawCircle(14f, 14f, 14f, Paint(Paint.ANTI_ALIAS_FLAG).apply { this.color = color })
+    return bitmap
 }
 
 internal fun refreshIcon(color: Int): Bitmap {
@@ -219,10 +241,6 @@ internal fun refreshIcon(color: Int): Bitmap {
     canvas.drawLine(40f, 16f, 29f, 16f, paint)
     return bitmap
 }
-
-private fun marketAccent(row: WidgetRowData, light: Boolean): Int =
-    if (row.negative) { if (light) 0xffa65a47.toInt() else 0xffe2a38e.toInt() }
-    else { if (light) 0xff506e37.toInt() else 0xffc9ef9a.toInt() }
 
 private fun detailIntent(context: Context, appId: Int, symbol: String): Intent =
     Intent(context, MainActivity::class.java).setData(Uri.parse("folio://widget/$appId/stock/${Uri.encode(symbol)}"))

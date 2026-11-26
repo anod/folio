@@ -7,6 +7,8 @@ import kotlinx.coroutines.flow.callbackFlow
 import kotlinx.coroutines.channels.awaitClose
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import com.folio.app.widget.WidgetConfig
 
 fun recordFailure(entry: Entry, attemptedAt: Long, outcome: String): Entry =
@@ -21,6 +23,10 @@ class Store internal constructor(context: Context, private val provider: MarketD
     private var lastSummary = RefreshSummary(0, 0, 0, false)
     private val mutableEntries = MutableStateFlow(readEntries())
     val entries: StateFlow<List<Entry>> = mutableEntries
+    private val mutableClock = MutableStateFlow(System.currentTimeMillis())
+    /** Render time for widgets; Glance only recomposes on state changes, so time-based status needs a tick. */
+    val clock: StateFlow<Long> = mutableClock
+    fun tick() { mutableClock.value = System.currentTimeMillis() }
 
     private fun readEntries(): List<Entry> = decodeEntries(prefs.getString("entries", "[]") ?: "[]")
 
@@ -45,6 +51,22 @@ class Store internal constructor(context: Context, private val provider: MarketD
         } catch (e: MarketException) {
             rememberRateLimit(e, System.currentTimeMillis())
             throw e
+        }
+    }
+
+    suspend fun chartHistory(symbol: String, range: ChartRange): ChartSeries = withContext(NonCancellable) {
+        mutex.withLock {
+            val now = System.currentTimeMillis()
+            val until = globalRetryAfter()
+            if (providerBlockedUntil(until, now) != null) {
+                throw MarketException("Provider rate limited; retry after ${dateTime(until)}", true, until, true)
+            }
+            try {
+                provider.fetchHistory(normalizeSymbol(symbol), range)
+            } catch (e: MarketException) {
+                rememberRateLimit(e, System.currentTimeMillis())
+                throw e
+            }
         }
     }
 
@@ -106,7 +128,7 @@ class Store internal constructor(context: Context, private val provider: MarketD
         val symbol = prefs.getString("widget.$id.symbol", null)
         return WidgetConfig(
             if (symbol == null) entries.value.map { it.symbol } else listOfNotNull(symbol.takeIf { it.isNotEmpty() }),
-            getString("widget.$id.theme", "Graphite"),
+            getString("widget.$id.theme", "System"),
             getString("widget.$id.opacity", "100").toIntOrNull()?.coerceIn(35, 100) ?: 100,
         )
     }

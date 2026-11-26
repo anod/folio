@@ -14,6 +14,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.selection.selectableGroup
@@ -29,22 +30,23 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import androidx.glance.appwidget.updateAll
 import androidx.core.view.WindowCompat
 import com.folio.app.market.*
 import com.folio.app.ui.theme.FolioTheme
-import com.folio.app.widget.FolioWidget
 import com.folio.app.widget.FolioWidgetReceiver
 import com.folio.app.widget.WidgetConfig
 import com.folio.app.widget.WidgetLayout
@@ -54,9 +56,12 @@ import com.folio.app.widget.presentWidget
 import com.folio.app.widget.PinResultReceiver
 import com.folio.app.widget.refreshIcon
 import com.folio.app.widget.sparkline
+import com.folio.app.widget.tradingDot
+import com.folio.app.widget.tradingDotColor
+import com.folio.app.widget.widgetColors
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-private val sage = Color(0xffc9ef9a)
 private val graphite = Color(0xff1b2923)
 
 @Composable
@@ -69,7 +74,7 @@ fun FolioApp(requestedSymbol: Pair<String, Long>? = null, providedStore: Store? 
     var detail by remember { mutableStateOf("") }
     var theme by remember { mutableStateOf(store.getString("appTheme", "System")) }
     var size by remember { mutableStateOf("Compact") }
-    var palette by remember { mutableStateOf("Graphite") }
+    var palette by remember { mutableStateOf("System") }
     var opacity by remember { mutableFloatStateOf(100f) }
     var chosen by remember { mutableStateOf<List<String>?>(null) }
     var refreshing by remember { mutableStateOf(false) }
@@ -153,7 +158,10 @@ fun FolioApp(requestedSymbol: Pair<String, Long>? = null, providedStore: Store? 
                                         Text(e.symbol.take(1), color = MaterialTheme.colorScheme.primary, fontWeight = FontWeight.Bold)
                                     }
                                     Column(Modifier.weight(1f)) {
-                                        Text(e.symbol, fontWeight = FontWeight.Bold)
+                                        Row(verticalAlignment = Alignment.CenterVertically) {
+                                            QuoteTradingDot(e.quote)
+                                            Text(e.symbol, fontWeight = FontWeight.Bold)
+                                        }
                                         Text(e.quote?.name ?: "No saved quote", style = MaterialTheme.typography.bodySmall,
                                             maxLines = 1, overflow = TextOverflow.Ellipsis, color = MaterialTheme.colorScheme.onSurfaceVariant)
                                     }
@@ -176,7 +184,7 @@ fun FolioApp(requestedSymbol: Pair<String, Long>? = null, providedStore: Store? 
                                 if (reordering) Row {
                                     TextButton(onClick = { scope.launch { store.move(e.symbol, -1) } }) { Text("Move up") }
                                     TextButton(onClick = { scope.launch { store.move(e.symbol, 1) } }) { Text("Move down") }
-                                    TextButton(onClick = { scope.launch { store.remove(e.symbol); FolioWidget().updateAll(context) } }) { Text("Remove") }
+                                    TextButton(onClick = { scope.launch { store.remove(e.symbol); updateWidgets(context) } }) { Text("Remove") }
                                 }
                             }
                             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
@@ -207,10 +215,10 @@ fun FolioApp(requestedSymbol: Pair<String, Long>? = null, providedStore: Store? 
                     }
                     "Detail" -> {
                         val e = entries.find { it.symbol == detail }
-                        StockDetail(detail, e, onBack = { screen = "Watchlist" })
+                        StockDetail(detail, e, store, onBack = { screen = "Watchlist" })
                     }
                     "Add" -> AddScreen(store, onBack = { screen = "Watchlist" }, onSave = { quote ->
-                        scope.launch { store.add(quote); FolioWidget().updateAll(context); screen = "Watchlist" }
+                        scope.launch { store.add(quote); updateWidgets(context); screen = "Watchlist" }
                     })
                     "Data" -> {
                         Eyebrow("DATA, WITH CONTEXT")
@@ -223,7 +231,7 @@ fun FolioApp(requestedSymbol: Pair<String, Long>? = null, providedStore: Store? 
                             refreshing = true
                             scope.launch {
                                 val result = store.refresh()
-                                FolioWidget().updateAll(context)
+                                updateWidgets(context)
                                 if (result.retryPending) Refresh.retry(context)
                                 refreshMessage = "${result.successes} of ${result.attempted} attempted stocks refreshed · ${result.total - result.attempted} deferred"
                                 result.providerRetryAfter?.let { refreshMessage += " · Provider rate limited until ${dateTime(it)}" }
@@ -306,24 +314,24 @@ private fun WelcomeIllustration() {
         Box(
             Modifier.offset(x = 12.dp, y = 16.dp).size(width = 190.dp, height = 220.dp)
                 .graphicsLayer { rotationZ = -7f }
-                .background(Color(0xff87977d).copy(alpha = 0.55f), RoundedCornerShape(24.dp)),
+                .background(MaterialTheme.colorScheme.secondary.copy(alpha = 0.55f), RoundedCornerShape(24.dp)),
         )
         Column(
             Modifier.size(width = 190.dp, height = 220.dp)
                 .graphicsLayer { rotationZ = -7f }
-                .background(graphite, RoundedCornerShape(24.dp)).padding(18.dp),
+                .background(MaterialTheme.colorScheme.surfaceContainerHigh, RoundedCornerShape(24.dp)).padding(18.dp),
             verticalArrangement = Arrangement.SpaceBetween,
         ) {
             Column {
-                Text("MSFT", color = Color(0xfff1f6e8), fontWeight = FontWeight.Bold)
-                Text("Microsoft", color = Color(0xffb5c5b1), style = MaterialTheme.typography.bodySmall)
+                Text("MSFT", color = MaterialTheme.colorScheme.onSurface, fontWeight = FontWeight.Bold)
+                Text("Microsoft", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
             }
             Column {
-                Text("489.93", color = Color(0xfff1f6e8), style = MaterialTheme.typography.headlineMedium)
-                Text("+0.99%", color = sage, style = MaterialTheme.typography.bodySmall)
+                Text("489.93", color = MaterialTheme.colorScheme.onSurface, style = MaterialTheme.typography.headlineMedium)
+                Text("+0.99%", color = MaterialTheme.colorScheme.primary, style = MaterialTheme.typography.bodySmall)
             }
-            Chart(listOf(1.0, 1.5, 1.3, 2.2, 1.9, 2.8, 2.6, 3.5, 3.1, 4.0, 3.8, 4.6), sage)
-            Text("Illustrative widget preview", color = Color(0xffb5c5b1), style = MaterialTheme.typography.labelSmall)
+            Chart(listOf(1.0, 1.5, 1.3, 2.2, 1.9, 2.8, 2.6, 3.5, 3.1, 4.0, 3.8, 4.6), MaterialTheme.colorScheme.primary)
+            Text("Illustrative widget preview", color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.labelSmall)
         }
     }
 }
@@ -354,10 +362,10 @@ private fun FolioNavigation(selected: String, onSelect: (String) -> Unit) {
                 ) {
                     Box(
                         Modifier.size(32.dp).background(
-                            if (active) Color(0xffcbe6af) else Color.Transparent, RoundedCornerShape(8.dp)),
+                            if (active) colors.secondaryContainer else Color.Transparent, RoundedCornerShape(8.dp)),
                         contentAlignment = Alignment.Center,
                     ) {
-                        CompositionLocalProvider(LocalContentColor provides if (active) Color(0xff30462c) else colors.onSurfaceVariant) {
+                        CompositionLocalProvider(LocalContentColor provides if (active) colors.onSecondaryContainer else colors.onSurfaceVariant) {
                             NavigationIcon(tab)
                         }
                     }
@@ -389,8 +397,27 @@ private fun BackControl(onClick: () -> Unit) {
 }
 
 @Composable
-private fun StockDetail(symbol: String, entry: Entry?, onBack: () -> Unit) {
+private fun StockDetail(symbol: String, entry: Entry?, store: Store, onBack: () -> Unit) {
     val quote = entry?.quote
+    var range by remember(symbol) { mutableStateOf(ChartRange.DAY) }
+    val history = remember(symbol) { mutableStateMapOf<ChartRange, ChartSeries>() }
+    var loadingRange by remember(symbol) { mutableStateOf<ChartRange?>(null) }
+    var historyError by remember(symbol) { mutableStateOf<String?>(null) }
+    var retry by remember(symbol) { mutableIntStateOf(0) }
+    LaunchedEffect(symbol, range, retry) {
+        val selected = range
+        historyError = null
+        if (quote != null && selected != ChartRange.DAY && history[selected] == null) {
+            loadingRange = selected
+            try {
+                history[selected] = store.chartHistory(symbol, selected)
+            } catch (e: MarketException) {
+                historyError = e.message ?: "Chart could not be loaded."
+            } finally {
+                loadingRange = null
+            }
+        }
+    }
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
         BackControl(onBack)
         quote?.let {
@@ -403,7 +430,10 @@ private fun StockDetail(symbol: String, entry: Entry?, onBack: () -> Unit) {
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
             Title(quote?.name ?: symbol)
-            Text(symbol, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                QuoteTradingDot(quote)
+                Text(symbol, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
         }
         Box(Modifier.size(48.dp).background(MaterialTheme.colorScheme.surfaceContainer, RoundedCornerShape(12.dp)),
             contentAlignment = Alignment.Center) {
@@ -417,13 +447,37 @@ private fun StockDetail(symbol: String, entry: Entry?, onBack: () -> Unit) {
             Spacer(Modifier.height(4.dp))
             Text(number(quote.price), style = MaterialTheme.typography.displaySmall)
             Text(changeText(quote), color = changeColor(quote))
-            if (quote.points.size > 1) {
-                val axis = remember(quote.pointTimes, quote.points.size, quote.timezone) {
-                    chartTimeAxis(quote.pointTimes, quote.points.size, quote.timezone)
+            Text("Daily change", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            ChoicePills(ChartRange.entries.map { it.name }, range.name,
+                label = { ChartRange.valueOf(it).label }, onSelect = { range = ChartRange.valueOf(it) })
+            val series = if (range == ChartRange.DAY) {
+                ChartSeries(quote.points, quote.pointTimes, quote.timezone, quote.fetchedAt)
+            } else history[range]
+            val axis = remember(series?.pointTimes, series?.points?.size, series?.timezone) {
+                series?.let { chartTimeAxis(it.pointTimes, it.points.size, it.timezone) }
+            }
+            BoxWithConstraints(Modifier.fillMaxWidth().height(170.dp), contentAlignment = Alignment.Center) {
+                when {
+                    series != null && series.points.size > 1 -> {
+                        val chartColor = if (range == ChartRange.DAY) changeColor(quote)
+                            else if (series.points.last() < series.points.first()) MaterialTheme.colorScheme.error
+                            else MaterialTheme.colorScheme.primary
+                        DetailChart(series.points, axis?.fractions, chartColor, Modifier.requiredWidth(maxWidth + 40.dp).fillMaxHeight())
+                    }
+                    historyError != null && range != ChartRange.DAY && loadingRange != range -> {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(checkNotNull(historyError), color = MaterialTheme.colorScheme.error,
+                                style = MaterialTheme.typography.bodySmall, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                            TextButton(onClick = { retry++ }) { Text("Retry chart") }
+                        }
+                    }
+                    range != ChartRange.DAY -> Text("Loading ${range.label} chart…", style = MaterialTheme.typography.bodySmall)
+                    else -> Text("Chart unavailable for this quote.", style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-                BoxWithConstraints(Modifier.fillMaxWidth()) {
-                    DetailChart(quote.points, axis?.fractions, changeColor(quote), Modifier.requiredWidth(maxWidth + 40.dp).height(170.dp))
-                }
+            }
+            val fontScale = LocalDensity.current.fontScale
+            Column(Modifier.fillMaxWidth().height(maxOf(48f, 38f * fontScale).dp)) {
                 if (axis != null) {
                     Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
                         axis.labels.forEach { label ->
@@ -432,16 +486,19 @@ private fun StockDetail(symbol: String, entry: Entry?, onBack: () -> Unit) {
                     }
                     Text("Chart time · ${axis.timezone}", style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
-                } else {
+                } else if (series != null && series.points.size > 1) {
                     Text("Chart times unavailable in this saved snapshot. Refresh in Data to load time marks.",
-                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 2, overflow = TextOverflow.Ellipsis)
                 }
+            }
+            Column(Modifier.fillMaxWidth().height(maxOf(48f, 38f * fontScale).dp)) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-                    Text("1D · Intraday", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
-                    Text("Saved provider samples", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Text("${range.label} · ${range.description}", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                    if (series != null) Text("Provider samples", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-            } else {
-                Text("Chart unavailable for this quote.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                if (range != ChartRange.DAY && series != null) Text("Chart fetched: ${dateTime(series.fetchedAt)}",
+                    style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             Column(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceContainer, RoundedCornerShape(18.dp))
                 .padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
@@ -474,7 +531,7 @@ private fun DetailMetric(label: String, value: String, modifier: Modifier = Modi
 
 @Composable
 private fun DetailChart(points: List<Double>, timeFractions: List<Float>?, color: Color, modifier: Modifier = Modifier) {
-    Canvas(modifier.semantics { contentDescription = "Intraday price chart" }) {
+    Canvas(modifier.semantics { contentDescription = "Price chart" }) {
         val fractions = chartFractions(points)
         fun point(i: Int) = Offset(size.width * (timeFractions?.get(i) ?: (i.toFloat() / (points.size - 1))),
             size.height * (.1f + .8f * (1 - fractions[i])))
@@ -532,7 +589,7 @@ fun WidgetDesigner(
     var choosing by remember { mutableStateOf(false) }
     ChoicePills(listOf("Compact", "Wide", "Watchlist"), size, { it }, onSizeChange)
     val layout = when (size) { "Watchlist" -> WidgetLayout.WATCHLIST; "Wide" -> WidgetLayout.WIDE; else -> WidgetLayout.COMPACT }
-    WidgetPreview(presentWidget(config, entries, layout), config.theme, config.opacity.toFloat())
+    WidgetPreview(presentWidget(config, entries, layout, rememberNow()), config.theme, config.opacity.toFloat())
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
         Text("Stocks", style = MaterialTheme.typography.bodyMedium)
         TextButton(onClick = { choosing = !choosing }) {
@@ -558,7 +615,8 @@ fun WidgetDesigner(
     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
         Text("Appearance", style = MaterialTheme.typography.bodyMedium)
         Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            listOf("Graphite" to graphite, "Sage" to Color(0xffe2edcf), "Paper" to Color(0xfff5f3eb)).forEach { (name, color) ->
+            listOf("System" to widgetColors(LocalContext.current, "System").accent,
+                "Graphite" to graphite, "Sage" to Color(0xffe2edcf), "Paper" to Color(0xfff5f3eb)).forEach { (name, color) ->
                 Box(Modifier.size(40.dp).clickable { onConfigChange(config.copy(theme = name)) }
                     .semantics { contentDescription = "$name widget theme${if (config.theme == name) ", selected" else ""}" },
                     contentAlignment = Alignment.Center) {
@@ -605,7 +663,10 @@ private fun AddScreen(store: Store, onBack: () -> Unit, onSave: (Quote) -> Unit)
     quote?.let { q ->
         Card(Modifier.fillMaxWidth()) {
             Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text("${q.symbol} · ${q.name}", fontWeight = FontWeight.Bold)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    QuoteTradingDot(q)
+                    Text("${q.symbol} · ${q.name}", fontWeight = FontWeight.Bold)
+                }
                 Text("${number(q.price)} ${q.currency ?: "Unknown currency"}", style = MaterialTheme.typography.headlineSmall)
                 Text("${q.exchange ?: "Unknown exchange"} · ${changeText(q)}")
                 if (q.previousCloseFallback) Text("Previous close, not a current trade")
@@ -623,7 +684,10 @@ private fun ReviewCard(e: Entry) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 Column(Modifier.weight(1f)) {
-                    Text(e.symbol, fontWeight = FontWeight.Bold)
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        QuoteTradingDot(e.quote)
+                        Text(e.symbol, fontWeight = FontWeight.Bold)
+                    }
                     Text(e.quote?.name ?: "No saved value", style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
@@ -651,6 +715,30 @@ private fun ReviewCard(e: Entry) {
 
 @Composable private fun changeColor(quote: Quote): Color =
     if ((quote.change ?: 0.0) < 0) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.primary
+
+@Composable
+private fun rememberNow(): Long {
+    val now by produceState(System.currentTimeMillis()) {
+        while (true) {
+            delay(30_000)
+            value = System.currentTimeMillis()
+        }
+    }
+    return now
+}
+
+@Composable
+private fun QuoteTradingDot(quote: Quote?) {
+    val status = tradingStatus(quote, rememberNow())
+    val dark = MaterialTheme.colorScheme.surface.luminance() < 0.5f
+    StatusDot(tradingDotColor(status == TradingStatus.ACTIVE, dark), status, 8.dp, 6.dp)
+}
+
+@Composable
+private fun StatusDot(color: Color, status: TradingStatus, size: Dp, gap: Dp) {
+    Box(Modifier.padding(end = gap).size(size).background(color, CircleShape)
+        .semantics { contentDescription = status.description })
+}
 
 @Composable private fun NavigationIcon(tab: String) {
     val color = LocalContentColor.current
@@ -683,10 +771,11 @@ private fun ReviewCard(e: Entry) {
 
 @Composable
 private fun WidgetPreview(presentation: WidgetPresentation, palette: String, opacity: Float) {
-    val bg = when (palette) { "Sage" -> Color(0xffe2edcf); "Paper" -> Color(0xfff5f3eb); else -> graphite }
-    val fg = if (palette == "Graphite") Color(0xfff1f6e8) else Color(0xff263723)
-    val muted = if (palette == "Graphite") Color(0xff9bad9f) else Color(0xff687a5f)
-    Box(Modifier.fillMaxWidth().background(Brush.linearGradient(listOf(Color(0xffd0dbbf), Color(0xffa4b498))), RoundedCornerShape(24.dp)).padding(20.dp),
+    val colors = widgetColors(LocalContext.current, palette)
+    val bg = colors.background
+    val fg = colors.text
+    val muted = colors.muted
+    Box(Modifier.fillMaxWidth().background(Brush.linearGradient(listOf(MaterialTheme.colorScheme.surfaceContainerHighest, MaterialTheme.colorScheme.secondaryContainer)), RoundedCornerShape(24.dp)).padding(20.dp),
         contentAlignment = Alignment.Center) {
     Column(Modifier.widthIn(max = if (presentation.layout == WidgetLayout.COMPACT) 200.dp else 360.dp)
         .fillMaxWidth().height(if (presentation.layout == WidgetLayout.WATCHLIST) 400.dp else 210.dp)
@@ -701,10 +790,13 @@ private fun WidgetPreview(presentation: WidgetPresentation, palette: String, opa
         else if (presentation.layout == WidgetLayout.WATCHLIST) {
             Text("Your watchlist", color = fg, fontSize = 12.sp, lineHeight = 14.sp, fontWeight = FontWeight.Bold)
             presentation.rows.forEach { item ->
-                val accent = previewAccent(item.negative, palette)
+                val accent = if (item.negative) colors.negative else colors.accent
                 Row(Modifier.fillMaxWidth().padding(top = 3.dp), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
-                        Text(item.symbol, color = fg, fontSize = 11.sp, lineHeight = 13.sp, fontWeight = FontWeight.Bold)
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            StatusDot(colors.tradingDot(item.trading == TradingStatus.ACTIVE), item.trading, 7.dp, 5.dp)
+                            Text(item.symbol, color = fg, fontSize = 11.sp, lineHeight = 13.sp, fontWeight = FontWeight.Bold)
+                        }
                         Text(item.name, color = muted, fontSize = 9.sp, lineHeight = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
                     Box(Modifier.width(40.dp)) { WidgetChart(item.points, accent, 24) }
@@ -721,13 +813,17 @@ private fun WidgetPreview(presentation: WidgetPresentation, palette: String, opa
         } else {
             if (presentation.layout == WidgetLayout.WIDE) {
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    StatusDot(colors.tradingDot(row.trading == TradingStatus.ACTIVE), row.trading, 7.dp, 5.dp)
                     Text(row.symbol, fontSize = 12.sp, lineHeight = 14.sp, color = fg, fontWeight = FontWeight.Bold)
                     Text(" / ${row.name}", Modifier.weight(1f), fontSize = 10.sp, lineHeight = 12.sp, color = muted,
                         maxLines = 1, overflow = TextOverflow.Ellipsis)
                     row.exchange?.let { Text(it, fontSize = 9.sp, lineHeight = 11.sp, color = muted, maxLines = 1) }
                 }
             } else {
-                Text(row.symbol, fontSize = 12.sp, lineHeight = 14.sp, color = fg, fontWeight = FontWeight.Bold)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    StatusDot(colors.tradingDot(row.trading == TradingStatus.ACTIVE), row.trading, 7.dp, 5.dp)
+                    Text(row.symbol, fontSize = 12.sp, lineHeight = 14.sp, color = fg, fontWeight = FontWeight.Bold)
+                }
                 Text(row.name, fontSize = 10.sp, lineHeight = 12.sp, color = muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
             Spacer(Modifier.height(8.dp))
@@ -737,13 +833,13 @@ private fun WidgetPreview(presentation: WidgetPresentation, palette: String, opa
                         Text(row.price, fontSize = 28.sp, lineHeight = 32.sp, color = fg, fontWeight = FontWeight.Medium, maxLines = 1)
                         row.currency?.let { Text(" $it", fontSize = 10.sp, lineHeight = 12.sp, color = muted, maxLines = 1) }
                     }
-                    Text(row.change, color = previewAccent(row.negative, palette), fontSize = 10.sp, lineHeight = 12.sp, maxLines = 1)
+                    Text(row.change, color = if (row.negative) colors.negative else colors.accent, fontSize = 10.sp, lineHeight = 12.sp, maxLines = 1)
                 }
                 if (presentation.layout == WidgetLayout.WIDE && row.points.size > 1)
-                    Box(Modifier.width(110.dp)) { WidgetChart(row.points, previewAccent(row.negative, palette), 54) }
+                    Box(Modifier.width(110.dp)) { WidgetChart(row.points, if (row.negative) colors.negative else colors.accent, 54) }
             }
             if (presentation.layout == WidgetLayout.COMPACT && row.points.size > 1)
-                Box(Modifier.fillMaxWidth()) { WidgetChart(row.points, previewAccent(row.negative, palette), 39) }
+                Box(Modifier.fillMaxWidth()) { WidgetChart(row.points, if (row.negative) colors.negative else colors.accent, 39) }
         }
         }
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -755,7 +851,7 @@ private fun WidgetPreview(presentation: WidgetPresentation, palette: String, opa
                 }
             }
             Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
-                val color = previewAccent(false, palette)
+                val color = colors.accent
                 Image(remember(color) { refreshIcon(color.toArgb()).asImageBitmap() }, contentDescription = "Refresh preview",
                     modifier = Modifier.size(16.dp))
             }
@@ -771,10 +867,6 @@ private fun WidgetChart(points: List<Double>, color: Color, height: Int) {
     Image(bitmap, contentDescription = "Intraday price chart", contentScale = ContentScale.FillBounds,
         modifier = Modifier.fillMaxWidth().height(height.dp))
 }
-
-private fun previewAccent(negative: Boolean, palette: String): Color =
-    if (negative) { if (palette == "Graphite") Color(0xffe2a38e) else Color(0xffa65a47) }
-    else { if (palette == "Graphite") sage else Color(0xff506e37) }
 
 @Composable
 private fun Chart(points: List<Double>, color: Color, height: Int = 45) {

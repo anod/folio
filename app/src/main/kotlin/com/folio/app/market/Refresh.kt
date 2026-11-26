@@ -11,6 +11,7 @@ import androidx.work.OneTimeWorkRequestBuilder
 import androidx.work.PeriodicWorkRequestBuilder
 import androidx.work.WorkManager
 import androidx.work.WorkerParameters
+import androidx.glance.appwidget.GlanceAppWidgetManager
 import androidx.glance.appwidget.updateAll
 import com.folio.app.widget.FolioWidget
 import java.util.concurrent.TimeUnit
@@ -18,8 +19,34 @@ import java.util.concurrent.TimeUnit
 class RefreshWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
     override suspend fun doWork(): Result {
         val summary = Store.get(applicationContext).refresh(manual = inputData.getBoolean("manual", false))
-        FolioWidget().updateAll(applicationContext)
+        updateWidgets(applicationContext)
         return if (summary.retryPending && runAttemptCount < 3) Result.retry() else Result.success()
+    }
+}
+
+class TradingStatusWorker(context: Context, params: WorkerParameters) : CoroutineWorker(context, params) {
+    override suspend fun doWork(): Result {
+        updateWidgets(applicationContext)
+        return Result.success()
+    }
+}
+
+/** Redraws every widget with the current time and wakes again when an active session ends, without fetching. */
+suspend fun updateWidgets(context: Context) {
+    Store.get(context).tick()
+    FolioWidget().updateAll(context)
+    scheduleTradingStatus(context)
+}
+
+suspend fun scheduleTradingStatus(context: Context) {
+    if (GlanceAppWidgetManager(context).getGlanceIds(FolioWidget::class.java).isEmpty()) return
+    val now = System.currentTimeMillis()
+    nextTradingStatusChange(Store.get(context).entries.value.mapNotNull { it.quote }, now)?.let { end ->
+        WorkManager.getInstance(context).enqueueUniqueWork(
+            "folio-status", ExistingWorkPolicy.REPLACE,
+            OneTimeWorkRequestBuilder<TradingStatusWorker>()
+                .setInitialDelay(end - now + 5_000, TimeUnit.MILLISECONDS).build(),
+        )
     }
 }
 
@@ -43,6 +70,7 @@ object Refresh {
         WorkManager.getInstance(context).cancelUniqueWork("folio-periodic")
         WorkManager.getInstance(context).cancelUniqueWork("folio-refresh")
         WorkManager.getInstance(context).cancelUniqueWork("folio-retry")
+        WorkManager.getInstance(context).cancelUniqueWork("folio-status")
     }
     fun retry(context: Context) {
         WorkManager.getInstance(context).enqueueUniqueWork("folio-retry", ExistingWorkPolicy.KEEP,
