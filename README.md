@@ -10,6 +10,8 @@ These APKs are debug-signed test builds, not production releases. Only install b
 
 Trusted repository builds reuse the Pixel development debug certificate, so their APKs update the development install without resetting watchlist/preferences. The keystore is stored only in the encrypted `ANDROID_DEBUG_KEYSTORE` Actions secret (base64-encoded standard Android debug keystore), never in Git or APK artifacts, and is removed from the runner after each job. Missing or mismatched secrets fail trusted builds explicitly. This is a debug key, not a release signing key.
 
+CI passes its temporary keystore path explicitly through `FOLIO_DEBUG_KEYSTORE` and verifies the finished APK's certificate before upload. Local builds keep Android's normal debug keystore unless that environment variable is set.
+
 Fork PRs never receive that secret and use an isolated runner debug key instead, with a warning in the run summary. Their APKs cannot update the regular development install in place. Do not switch to `pull_request_target` to expose signing secrets to fork code.
 
 ## Build

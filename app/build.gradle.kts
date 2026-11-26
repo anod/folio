@@ -16,6 +16,15 @@ android {
     testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
   }
 
+  providers.environmentVariable("FOLIO_DEBUG_KEYSTORE").orNull?.let { path ->
+    signingConfigs.getByName("debug") {
+      storeFile = file(path)
+      storePassword = "android"
+      keyAlias = "androiddebugkey"
+      keyPassword = "android"
+    }
+  }
+
   buildTypes {
     release {
       isMinifyEnabled = false
