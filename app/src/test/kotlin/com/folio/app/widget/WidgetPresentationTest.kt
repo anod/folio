@@ -2,13 +2,12 @@ package com.folio.app.widget
 
 import com.folio.app.market.Entry
 import com.folio.app.market.Quote
-import com.folio.app.market.compactDateTime
 import org.junit.Assert.*
 import org.junit.Test
 
 class WidgetPresentationTest {
     private fun entry(symbol: String) = Entry(symbol, Quote(symbol, symbol, "USD", null, null,
-        12.0, 10.0, 1000, 2000, listOf(10.0, 12.0)), 3000, "Network unavailable")
+        12.0, 10.0, 60_000, 120_000, listOf(10.0, 12.0)), 180_000, "Network unavailable")
 
     @Test fun configurationsAreIndependentOrderedAndRoundTrip() {
         val first = WidgetConfig(listOf("B", "A"), "Sage", 65)
@@ -29,9 +28,9 @@ class WidgetPresentationTest {
         assertEquals(tall.rows.first(), compact.rows.single())
         assertEquals("Cached · Network unavailable", compact.rows.single().status)
         assertFalse(compact.rows.single().quoteTime == compact.rows.single().fetchedAt)
-        assertEquals("Stock price: ${compactDateTime(1000)}", compact.rows.single().quoteTime)
-        assertEquals("Refreshed: ${compactDateTime(2000)}", compact.rows.single().fetchedAt)
-        assertEquals("Attempt: ${compactDateTime(3000)}", compact.rows.single().lastAttempt)
+        assertEquals("Quote: ${widgetDateTime(60_000)}", compact.rows.single().quoteTime)
+        assertEquals("Fetched: ${widgetDateTime(120_000)}", compact.rows.single().fetchedAt)
+        assertEquals("Attempt: ${widgetDateTime(180_000)}", compact.rows.single().lastAttempt)
         assertTrue(presentWidget(WidgetConfig(emptyList()), entries, WidgetLayout.COMPACT).rows.isEmpty())
     }
 
@@ -49,7 +48,7 @@ class WidgetPresentationTest {
         WidgetLayout.entries.forEach { layout ->
             val row = presentWidget(WidgetConfig(listOf("A")), listOf(falling), layout).rows.single()
             assertTrue(row.negative)
-            assertTrue(row.change.startsWith("−"))
+            assertTrue(row.change.startsWith("↘ −"))
         }
     }
 }

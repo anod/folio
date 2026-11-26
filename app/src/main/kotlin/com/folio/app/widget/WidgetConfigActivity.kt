@@ -14,10 +14,12 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import androidx.core.view.WindowCompat
 import androidx.glance.appwidget.GlanceAppWidgetManager
 import com.folio.app.market.Refresh
 import com.folio.app.market.Store
 import com.folio.app.ui.theme.FolioTheme
+import com.folio.app.ui.WidgetDesigner
 import kotlinx.coroutines.launch
 
 class WidgetConfigActivity : ComponentActivity() {
@@ -32,40 +34,41 @@ class WidgetConfigActivity : ComponentActivity() {
         }
         val store = Store.get(this)
         setContent {
-            FolioTheme {
+            val appTheme = remember { store.getString("appTheme", "System") }
+            val dark = when (appTheme) {
+                "Dark" -> true
+                "Light" -> false
+                else -> androidx.compose.foundation.isSystemInDarkTheme()
+            }
+            SideEffect {
+                WindowCompat.getInsetsController(window, window.decorView).apply {
+                    isAppearanceLightStatusBars = !dark
+                    isAppearanceLightNavigationBars = !dark
+                }
+            }
+            FolioTheme(darkTheme = dark) {
                 val entries by store.entries.collectAsState()
                 val initial = remember {
                     if (store.hasWidgetConfig(id)) store.widgetConfig(id)
                     else WidgetConfig.decode(store.getString("draft.config", WidgetConfig(entries.map { it.symbol }).encode()))
                 }
-                var symbols by remember { mutableStateOf(initial.symbols) }
-                var theme by remember { mutableStateOf(initial.theme) }
-                var opacity by remember { mutableFloatStateOf(initial.opacity.toFloat()) }
+                var config by remember { mutableStateOf(initial) }
+                val options = remember { AppWidgetManager.getInstance(this).getAppWidgetOptions(id) }
+                var size by remember {
+                    val width = options.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_WIDTH)
+                    val height = options.getInt(AppWidgetManager.OPTION_APPWIDGET_MIN_HEIGHT)
+                    mutableStateOf(if (height >= 320 && width >= 220) "Watchlist" else if (width >= 220) "Wide" else "Compact")
+                }
                 val scope = rememberCoroutineScope()
-                Column(Modifier.fillMaxSize().safeDrawingPadding().verticalScroll(rememberScrollState()).padding(24.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Surface(Modifier.fillMaxSize(), color = MaterialTheme.colorScheme.background) {
+                Column(Modifier.fillMaxSize().safeDrawingPadding().verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                    Text("YOUR HOME SCREEN, YOUR WAY", style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.secondary)
                     Text("Make it yours.", style = MaterialTheme.typography.headlineMedium)
-                    Text("Choose and order stocks for this widget. The first is featured in compact and wide layouts.")
-                    if (entries.isEmpty()) Text("Add a stock in Folio first. You can still add an empty widget.")
-                    val available = entries.map { it.symbol }
-                    (symbols.filter { it in available } + available.filterNot { it in symbols }).forEach { symbol ->
-                        Row {
-                            Checkbox(checked = symbol in symbols, onCheckedChange = { checked ->
-                                symbols = if (checked) symbols + symbol else symbols - symbol
-                            })
-                            Text(symbol, Modifier.weight(1f).padding(top = 12.dp))
-                            TextButton(enabled = symbol in symbols, onClick = { symbols = moveSymbol(symbols, symbol, -1) }) { Text("↑") }
-                            TextButton(enabled = symbol in symbols, onClick = { symbols = moveSymbol(symbols, symbol, 1) }) { Text("↓") }
-                        }
-                    }
-                    Row {
-                        listOf("Graphite", "Sage", "Paper").forEach { value ->
-                            TextButton(onClick = { theme = value }) { Text(if (theme == value) "✓ $value" else value) }
-                        }
-                    }
-                    Text("Background opacity: ${opacity.toInt()}%")
-                    Slider(value = opacity, onValueChange = { opacity = it }, valueRange = 35f..100f)
-                    Button(onClick = {
-                        store.saveWidgetConfig(id, WidgetConfig(symbols, theme, opacity.toInt()))
+                    Text("Preview saved values for this widget. Resize it on your home screen.")
+                    WidgetDesigner(entries, config, size, onSizeChange = { size = it }, onConfigChange = { config = it })
+                    Button(modifier = Modifier.fillMaxWidth(), onClick = {
+                        store.saveWidgetConfig(id, config)
                         scope.launch {
                             val glanceId = GlanceAppWidgetManager(this@WidgetConfigActivity).getGlanceIdBy(id)
                             FolioWidget().update(this@WidgetConfigActivity, glanceId)
@@ -74,6 +77,7 @@ class WidgetConfigActivity : ComponentActivity() {
                             finish()
                         }
                     }) { Text("Save widget") }
+                }
                 }
             }
         }

@@ -2,10 +2,17 @@ package com.folio.app.widget
 
 import com.folio.app.market.Entry
 import com.folio.app.market.changeText
-import com.folio.app.market.compactDateTime
 import com.folio.app.market.number
+import com.folio.app.market.signed
 import org.json.JSONArray
 import org.json.JSONObject
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
+
+fun widgetDateTime(value: Long?): String = value?.let {
+    SimpleDateFormat("MMM d HH:mm", Locale.getDefault()).format(Date(it))
+} ?: "Unknown"
 
 data class WidgetConfig(
     val symbols: List<String>,
@@ -40,8 +47,11 @@ enum class WidgetLayout { COMPACT, WIDE, WATCHLIST }
 data class WidgetRowData(
     val symbol: String,
     val name: String,
+    val exchange: String?,
     val price: String,
+    val currency: String?,
     val change: String,
+    val percentChange: String,
     val quoteTime: String,
     val fetchedAt: String,
     val status: String?,
@@ -57,17 +67,21 @@ fun presentWidget(config: WidgetConfig, entries: List<Entry>, layout: WidgetLayo
     val rows = config.symbols.mapNotNull { bySymbol[it] }.map { entry ->
         val q = entry.quote
         WidgetRowData(
-            entry.symbol, q?.name ?: "No saved quote",
-            q?.let { "${number(it.price)} ${it.currency ?: ""}".trim() } ?: "Unavailable",
-            q?.let(::changeText) ?: (entry.outcome ?: "No quote yet"),
-            "Stock price: ${compactDateTime(q?.quoteTime)}",
-            "Refreshed: ${compactDateTime(q?.fetchedAt)}",
+            entry.symbol, q?.name ?: "No saved quote", q?.exchange,
+            q?.let { number(it.price) } ?: "Unavailable",
+            q?.currency,
+            q?.let { quote ->
+                quote.change?.let { "${if (it < 0) "↘" else "↗"} ${changeText(quote)}" } ?: changeText(quote)
+            } ?: (entry.outcome ?: "No quote yet"),
+            q?.percent?.let { "${signed(it)}%" } ?: "—",
+            "Quote: ${widgetDateTime(q?.quoteTime)}",
+            "Fetched: ${widgetDateTime(q?.fetchedAt)}",
             listOfNotNull(
                 if (q?.previousCloseFallback == true) "Previous close, not a current trade" else null,
                 if (entry.outcome != null && entry.outcome != "Success")
                     "${if (q == null) "" else "Cached · "}${entry.outcome}" else null,
             ).joinToString(" · ").ifEmpty { null },
-            if (entry.outcome != null && entry.outcome != "Success") "Attempt: ${compactDateTime(entry.attemptedAt)}" else null,
+            if (entry.outcome != null && entry.outcome != "Success") "Attempt: ${widgetDateTime(entry.attemptedAt)}" else null,
             q?.points ?: emptyList(),
             (q?.change ?: 0.0) < 0,
         )

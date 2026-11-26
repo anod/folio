@@ -3,6 +3,8 @@ package com.folio.app
 import android.appwidget.AppWidgetManager
 import android.accessibilityservice.AccessibilityService
 import android.graphics.Bitmap
+import androidx.activity.ComponentActivity
+import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.fillMaxSize
@@ -12,13 +14,22 @@ import androidx.compose.ui.Modifier
 import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.unit.Density
-import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.junit4.createAndroidComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.onAllNodesWithText
 import androidx.compose.ui.test.onFirst
+import androidx.compose.ui.test.hasText
+import androidx.compose.ui.test.SemanticsMatcher
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performScrollTo
 import androidx.compose.ui.test.performTextInput
+import androidx.compose.ui.test.onNodeWithContentDescription
+import androidx.compose.ui.test.assertWidthIsAtLeast
+import androidx.compose.ui.test.assertIsSelected
+import androidx.compose.ui.test.assertIsNotSelected
+import androidx.compose.ui.unit.dp
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.folio.app.market.MarketDataProvider
@@ -28,6 +39,7 @@ import com.folio.app.market.Store
 import com.folio.app.market.dateTime
 import com.folio.app.market.Refresh
 import androidx.work.WorkManager
+import androidx.core.view.WindowCompat
 import java.util.concurrent.TimeUnit
 import com.folio.app.ui.FolioApp
 import java.io.File
@@ -41,7 +53,7 @@ import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
 class FixtureScreensTest {
-    @get:Rule val compose = createComposeRule()
+    @get:Rule val compose = createAndroidComposeRule<ComponentActivity>()
     private val instrumentation = InstrumentationRegistry.getInstrumentation()
     private companion object {
         val automation by lazy { InstrumentationRegistry.getInstrumentation().uiAutomation }
@@ -51,6 +63,7 @@ class FixtureScreensTest {
     private val quote = Quote(
         "FIXT", "Fixture Company", "USD", "TEST", "UTC", 123.45, 120.0,
         1735686000000, 1735689600000, listOf(120.0, 121.0, 123.45),
+        pointTimes = listOf(1735655400000, 1735657200000, 1735678800000),
     )
     private var failRefresh = false
     private val provider = object : MarketDataProvider {
@@ -72,13 +85,19 @@ class FixtureScreensTest {
     }
 
     private fun showApp(fontScale: Float = 1f) {
+        val reviewNoHeader = InstrumentationRegistry.getArguments().getString("reviewNoHeader") == "true"
+        if (reviewNoHeader) {
+            compose.activityRule.scenario.onActivity { it.enableEdgeToEdge() }
+        }
         compose.setContent {
             val density = LocalDensity.current
             CompositionLocalProvider(LocalDensity provides Density(density.density, fontScale)) {
-            Column(Modifier.fillMaxSize().safeDrawingPadding()) {
-                Text("TEST DATA · simulated provider")
-                Box(Modifier.weight(1f)) { FolioApp(providedStore = store) }
-            }
+                if (reviewNoHeader) {
+                    FolioApp(providedStore = store)
+                } else Column(Modifier.fillMaxSize().safeDrawingPadding()) {
+                    Text("TEST DATA · simulated provider")
+                    Box(Modifier.weight(1f)) { FolioApp(providedStore = store) }
+                }
             }
         }
     }
@@ -96,6 +115,7 @@ class FixtureScreensTest {
     }
 
     @Test fun populatedScreensPreserveQuoteAndShowFailedRefresh() {
+        store.putString("appTheme", "Dark")
         runBlocking { store.add(store.lookup("FIXT")) }
         showApp()
         compose.onNodeWithText("FIXT").assertExists()
@@ -103,13 +123,24 @@ class FixtureScreensTest {
 
         compose.onNodeWithText("FIXT").performClick()
         compose.onNodeWithText("Fixture Company").assertExists()
+        screenshot("dark-detail")
         compose.onNodeWithText("Stock price time: ${dateTime(quote.quoteTime)}").assertExists()
         screenshot("detail")
 
         compose.onNodeWithText("Widgets").performClick()
         compose.onNodeWithText("Fixture Company").assertExists()
-        compose.onNodeWithText("123.45 USD").assertExists()
+        compose.onNodeWithText("123.45").assertExists().assertWidthIsAtLeast(70.dp)
         screenshot("preview")
+        compose.onNodeWithText("Wide").performClick()
+        screenshot("dark-wide")
+        compose.onAllNodesWithText("Watchlist").onFirst().performClick()
+        screenshot("dark-tall")
+        compose.onNodeWithText("Compact").performClick()
+        compose.onNodeWithText("Data").performClick()
+        screenshot("dark-data")
+        compose.onNode(hasText("Settings") and SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Tab)).performClick()
+        screenshot("dark-settings")
+        compose.onNodeWithText("Widgets").performClick()
 
         failRefresh = true
         val result = runBlocking { store.refresh() }
@@ -128,10 +159,22 @@ class FixtureScreensTest {
     }
 
     @Test fun emptyDataOffersFollowAction() {
+        store.putString("appTheme", "Dark")
         showApp()
+        compose.runOnIdle {
+            val window = compose.activity.window
+            val bars = WindowCompat.getInsetsController(window, window.decorView)
+            check(!bars.isAppearanceLightStatusBars && !bars.isAppearanceLightNavigationBars)
+        }
+        screenshot("dark-welcome")
+        compose.onNodeWithText("Explore the widget preview").performClick()
+        compose.onNode(hasText("Watchlist") and SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Tab)).performClick()
+        screenshot("empty-watchlist")
         compose.onNodeWithText("Data").performClick()
+        screenshot("empty-data")
         compose.onNodeWithText("Follow a stock").performScrollTo().performClick()
         compose.onNodeWithText("Find your next perspective.").assertExists()
+        screenshot("dark-add-empty")
     }
 
     @Test fun lightDesignAndAllPreviewLayouts() {
@@ -142,7 +185,14 @@ class FixtureScreensTest {
             store.add(quote.copy(symbol = "SAMP", name = "Sample Industries", price = 127.6))
         }
         showApp()
+        compose.runOnIdle {
+            val window = compose.activity.window
+            val bars = WindowCompat.getInsetsController(window, window.decorView)
+            check(bars.isAppearanceLightStatusBars && bars.isAppearanceLightNavigationBars)
+        }
         screenshot("light-watchlist")
+        compose.onNodeWithText("FIXT").performClick()
+        screenshot("light-detail")
         compose.onNodeWithText("Data").performClick()
         check(compose.onAllNodesWithText("Stock price time: ${dateTime(quote.quoteTime)}").fetchSemanticsNodes().size == 3)
         screenshot("light-data")
@@ -153,8 +203,46 @@ class FixtureScreensTest {
         compose.onNodeWithText("Wide").assertExists()
         compose.onAllNodesWithText("Watchlist").onFirst().performClick()
         screenshot("light-tall")
-        compose.onNodeWithText("Settings").performClick()
+        compose.onNodeWithText("Add to home screen ↗").performScrollTo()
+        screenshot("light-widget-controls")
+        compose.onNode(hasText("Settings") and SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Tab)).performClick()
         screenshot("light-settings")
+    }
+
+    @Test fun widgetDesignerSelectsStocksAndAppearance() {
+        runBlocking {
+            store.add(quote)
+            store.add(quote.copy(symbol = "DEMO", name = "Example Labs"))
+        }
+        showApp()
+        compose.onNodeWithText("Widgets").performClick()
+        compose.onNodeWithText("FIXT · Change").performScrollTo().performClick()
+        compose.onNodeWithText("Choose and order stocks · first is featured").assertExists()
+        compose.onNodeWithText("Done").performClick()
+        compose.onNodeWithContentDescription("Sage widget theme").performScrollTo().performClick()
+        compose.onNodeWithContentDescription("Sage widget theme, selected").assertExists()
+        compose.onNodeWithText("Quote: ${com.folio.app.widget.widgetDateTime(quote.quoteTime)}").assertExists()
+        compose.onNodeWithText("Fetched: ${com.folio.app.widget.widgetDateTime(quote.fetchedAt)}").assertExists()
+    }
+
+    @Test fun detailBackAndSettingsPillsKeepSelectionAccessible() {
+        store.putString("appTheme", "Dark")
+        runBlocking { store.add(quote) }
+        showApp()
+        compose.onNodeWithText("FIXT").performClick()
+        compose.onNodeWithContentDescription("Intraday price chart").assertExists()
+        compose.onNodeWithText("14:30").assertExists()
+        compose.onNodeWithText("21:00").assertExists()
+        compose.onNodeWithText("Chart time · UTC").assertExists()
+        compose.onNode(hasText("Watchlist") and SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Tab)).assertIsSelected()
+        compose.onNodeWithContentDescription("Back to watchlist").performClick()
+        compose.onNodeWithText("A little clarity.").assertExists()
+        compose.onNode(hasText("Settings") and SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Tab)).performClick()
+        compose.onNodeWithText("Dark").performScrollTo().assertIsSelected()
+        compose.onNodeWithText("Light").assertIsNotSelected().performClick()
+        compose.onNodeWithText("Light").assertIsSelected()
+        compose.onNodeWithText("Dark").assertIsNotSelected()
+        check(store.getString("appTheme", "System") == "Light")
     }
 
     @Test fun largeFontKeepsRefreshTimesAccessible() {
@@ -167,11 +255,19 @@ class FixtureScreensTest {
     }
 
     @Test fun exactLookupCanBeSavedAndReopenedWithoutTouchingProductionCache() {
+        store.putString("appTheme", "Light")
         showApp()
+        compose.onNodeWithText("Illustrative widget preview").assertExists()
+        compose.onNodeWithText("Clear prices. Honest timestamps.").assertExists()
+        compose.onNodeWithText("Widgets").assertDoesNotExist()
+        screenshot("light-welcome")
         compose.onNodeWithText("Choose your first stock").performClick()
+        screenshot("light-add-empty")
         compose.onNodeWithText("Symbol").performTextInput("FIXT")
         compose.onNodeWithText("Look up").performClick()
-        compose.onNodeWithText("+ Add to watchlist").performScrollTo().performClick()
+        compose.onNodeWithText("+ Add to watchlist").performScrollTo()
+        screenshot("light-add-verified")
+        compose.onNodeWithText("+ Add to watchlist").performClick()
         compose.onNodeWithText("FIXT").assertExists()
         check(Store(context, provider, preferenceName).entries.value.single().quote == quote)
     }
@@ -193,7 +289,7 @@ class FixtureScreensTest {
     @Test fun pinFeedbackDoesNotFollowNavigation() {
         assumeTrue(AppWidgetManager.getInstance(context).isRequestPinAppWidgetSupported)
         showApp()
-        compose.onNodeWithText("Widgets").performClick()
+        compose.onNodeWithText("Explore the widget preview").performClick()
         compose.onNodeWithText("Add to home screen ↗").performScrollTo().performClick()
         compose.waitUntil(5_000) {
             automation.rootInActiveWindow?.packageName?.toString()?.let { it != context.packageName } == true
