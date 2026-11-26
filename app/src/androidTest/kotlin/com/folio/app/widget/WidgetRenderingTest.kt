@@ -39,6 +39,7 @@ class WidgetRenderingTest {
     private val entry = Entry("FIXT", quote, 1735693200000, "Simulated outage")
 
     @Test fun compactWidgetKeepsBothTimesAndActionsVisible() = render(DpSize(180.dp, 210.dp), WidgetLayout.COMPACT, "compact")
+    @Test fun minimumWidgetKeepsBothTimesVisible() = render(DpSize(160.dp, 180.dp), WidgetLayout.COMPACT, "minimum")
     @Test fun wideWidgetKeepsBothTimesAndActionsVisible() = render(DpSize(350.dp, 210.dp), WidgetLayout.WIDE, "wide")
     @Test fun tallWidgetKeepsBothTimesAndActionsVisible() = render(DpSize(350.dp, 400.dp), WidgetLayout.WATCHLIST, "tall")
 
@@ -71,20 +72,25 @@ class WidgetRenderingTest {
         }
         composeRule.waitForIdle()
         composeRule.runOnIdle {
-            fun texts(view: View): List<TextView> =
-                if (view is TextView) listOf(view)
-                else if (view is ViewGroup) (0 until view.childCount).flatMap { texts(view.getChildAt(it)) }
-                else emptyList()
-            val nodes = texts(host)
-            for (prefix in listOf("Folio", "123.45", "Stock price:", "Refreshed:", "Refresh", "Settings")) {
-                val matches = nodes.filter { if (prefix in listOf("Refresh", "Settings")) it.text.toString() == prefix else it.text.startsWith(prefix) }
-                check(matches.size == if (prefix in listOf("Stock price:", "Refreshed:")) entries.size else 1)
+            fun descendants(view: View): List<View> =
+                listOf(view) + if (view is ViewGroup) (0 until view.childCount).flatMap { descendants(view.getChildAt(it)) } else emptyList()
+            val all = descendants(host)
+            val nodes = all.filterIsInstance<TextView>()
+            val action = all.first { it.contentDescription == "Refresh" }
+            val actionPosition = IntArray(2).also { action.getLocationOnScreen(it) }
+            for (prefix in listOf("FIXT", "123.45", "Quote:", "Fetched:")) {
+                val matches = nodes.filter { it.text.startsWith(prefix) }
+                check(matches.size == if (prefix in listOf("Quote:", "Fetched:")) entries.size else 1)
                 matches.forEach { node ->
                     val rect = android.graphics.Rect()
                     check(node.getLocalVisibleRect(rect) && rect.height() == node.height) { "$name: $prefix is clipped" }
                     val textLayout = checkNotNull(node.layout)
                     check((0 until textLayout.lineCount).all { textLayout.getEllipsisCount(it) == 0 }) { "$name: $prefix is truncated" }
-                    if (prefix in listOf("Refresh", "Settings")) check(textLayout.lineCount == 1) { "$name: $prefix wraps" }
+                    if (prefix in listOf("Quote:", "Fetched:")) {
+                        val position = IntArray(2).also { node.getLocationOnScreen(it) }
+                        if (layout == WidgetLayout.WATCHLIST)
+                            check(position[1] + node.height <= actionPosition[1]) { "$name: $prefix overlaps widget action" }
+                    }
                 }
             }
         }

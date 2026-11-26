@@ -1,33 +1,47 @@
 package com.folio.app.ui
 
 import android.appwidget.AppWidgetManager
+import android.app.Activity
 import android.app.PendingIntent
 import android.content.ComponentName
 import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.selection.selectableGroup
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.glance.appwidget.updateAll
+import androidx.core.view.WindowCompat
 import com.folio.app.market.*
 import com.folio.app.ui.theme.FolioTheme
 import com.folio.app.widget.FolioWidget
@@ -38,6 +52,8 @@ import com.folio.app.widget.WidgetPresentation
 import com.folio.app.widget.moveSymbol
 import com.folio.app.widget.presentWidget
 import com.folio.app.widget.PinResultReceiver
+import com.folio.app.widget.refreshIcon
+import com.folio.app.widget.sparkline
 import kotlinx.coroutines.launch
 
 private val sage = Color(0xffc9ef9a)
@@ -60,6 +76,7 @@ fun FolioApp(requestedSymbol: Pair<String, Long>? = null, providedStore: Store? 
     var pinMessage by remember(screen) { mutableStateOf("") }
     var refreshMessage by remember(screen) { mutableStateOf("") }
     var settingsMessage by remember(screen) { mutableStateOf("") }
+    var interval by remember { mutableStateOf(store.getString("interval", "15")) }
     var reordering by remember { mutableStateOf(false) }
     val selectedSymbols = chosen ?: entries.map { it.symbol }
     val config = WidgetConfig(selectedSymbols, palette, opacity.toInt())
@@ -68,19 +85,24 @@ fun FolioApp(requestedSymbol: Pair<String, Long>? = null, providedStore: Store? 
     }
     BackHandler(enabled = screen in listOf("Detail", "Add")) { screen = "Watchlist" }
     val scroll = key(screen) { rememberScrollState() }
-    FolioTheme(darkTheme = when (theme) {
+    val darkTheme = when (theme) {
         "Dark" -> true
         "Light" -> false
         else -> androidx.compose.foundation.isSystemInDarkTheme()
-    }) {
+    }
+    SideEffect {
+        (context as? Activity)?.window?.let { window ->
+            WindowCompat.getInsetsController(window, window.decorView).apply {
+                isAppearanceLightStatusBars = !darkTheme
+                isAppearanceLightNavigationBars = !darkTheme
+            }
+        }
+    }
+    FolioTheme(darkTheme = darkTheme) {
         Scaffold(
             bottomBar = {
-                NavigationBar {
-                    listOf("Watchlist", "Widgets", "Data", "Settings").forEach { tab ->
-                        NavigationBarItem(selected = screen == tab, onClick = { screen = tab },
-                            icon = { NavigationIcon(tab) },
-                            label = { Text(tab) })
-                    }
+                if (screen != "Welcome") {
+                    FolioNavigation(if (screen in listOf("Detail", "Add")) "Watchlist" else screen) { screen = it }
                 }
             }
         ) { padding ->
@@ -88,12 +110,18 @@ fun FolioApp(requestedSymbol: Pair<String, Long>? = null, providedStore: Store? 
                 verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 when (screen) {
                     "Welcome" -> {
-                        Eyebrow("MEET FOLIO")
-                        WidgetPreview(presentWidget(WidgetConfig(emptyList()), emptyList(), WidgetLayout.COMPACT), "Graphite", 100f)
+                        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                            Eyebrow("MEET FOLIO")
+                        }
+                        WelcomeIllustration()
                         Title("Follow the market.\nKeep your calm.")
                         Text("Your favorite stocks, beautifully at home. No account. No noise. Just perspective.")
-                        Button(onClick = { screen = "Add" }, modifier = Modifier.fillMaxWidth()) { Text("Choose your first stock") }
-                        TextButton(onClick = { screen = "Widgets" }) { Text("Explore the widget preview") }
+                        WelcomeFeature("Widgets that feel like yours")
+                        WelcomeFeature("Clear prices. Honest timestamps.")
+                        Button(onClick = { screen = "Add" }, modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp)) { Text("Choose your first stock") }
+                        Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                            TextButton(onClick = { screen = "Widgets" }) { Text("Explore the widget preview") }
+                        }
                     }
                     "Watchlist" -> {
                         Eyebrow("YOUR WATCHLIST")
@@ -159,34 +187,9 @@ fun FolioApp(requestedSymbol: Pair<String, Long>? = null, providedStore: Store? 
                         Eyebrow("YOUR HOME SCREEN, YOUR WAY")
                         Title("Make it yours.")
                         Text("Preview saved values here. Place a widget anywhere.")
-                        SingleChoiceSegmentedButtonRow(Modifier.fillMaxWidth()) {
-                            listOf("Compact", "Wide", "Watchlist").forEachIndexed { index, value ->
-                                SegmentedButton(selected = size == value, onClick = { size = value },
-                                    shape = SegmentedButtonDefaults.itemShape(index, 3)) {
-                                    Text(value, style = MaterialTheme.typography.bodySmall)
-                                }
-                            }
-                        }
-                        val layout = when (size) { "Watchlist" -> WidgetLayout.WATCHLIST; "Wide" -> WidgetLayout.WIDE; else -> WidgetLayout.COMPACT }
-                        WidgetPreview(presentWidget(config, entries, layout), palette, opacity)
-                        Text("Preview uses your saved data; no network request.")
-                        Row { listOf("Graphite", "Sage", "Paper").forEach {
-                            TextButton(onClick = { palette = it }) { Text(if (palette == it) "✓ $it" else it) }
-                        } }
-                        Text("Background opacity: ${opacity.toInt()}%")
-                        Slider(value = opacity, onValueChange = { opacity = it }, valueRange = 35f..100f)
-                        Text("Choose and order stocks · first is featured")
-                        val available = entries.map { it.symbol }
-                        (selectedSymbols.filter { it in available } + available.filterNot { it in selectedSymbols }).forEach { symbol ->
-                            Row {
-                                Checkbox(checked = symbol in selectedSymbols, onCheckedChange = { checked ->
-                                    chosen = if (checked) selectedSymbols + symbol else selectedSymbols - symbol
-                                })
-                                Text(symbol, Modifier.weight(1f).padding(top = 12.dp))
-                                TextButton(enabled = symbol in selectedSymbols, onClick = { chosen = moveSymbol(selectedSymbols, symbol, -1) }) { Text("↑") }
-                                TextButton(enabled = symbol in selectedSymbols, onClick = { chosen = moveSymbol(selectedSymbols, symbol, 1) }) { Text("↓") }
-                            }
-                        }
+                        WidgetDesigner(entries, config, size, onSizeChange = { size = it }, onConfigChange = {
+                            chosen = it.symbols; palette = it.theme; opacity = it.opacity.toFloat()
+                        })
                         Button(modifier = Modifier.fillMaxWidth(), shape = RoundedCornerShape(14.dp), onClick = {
                             val manager = AppWidgetManager.getInstance(context)
                             if (manager.isRequestPinAppWidgetSupported) {
@@ -204,20 +207,7 @@ fun FolioApp(requestedSymbol: Pair<String, Long>? = null, providedStore: Store? 
                     }
                     "Detail" -> {
                         val e = entries.find { it.symbol == detail }
-                        TextButton(onClick = { screen = "Watchlist" }) { Text("← Watchlist") }
-                        Title(e?.quote?.name ?: detail)
-                        Text(detail)
-                        if (e == null) Text("This stock is no longer in your watchlist.")
-                        e?.quote?.let { q ->
-                            Text("${number(q.price)} ${q.currency ?: ""}", style = MaterialTheme.typography.displaySmall)
-                            Text(changeText(q), color = changeColor(q))
-                            Chart(q.points, changeColor(q))
-                            Text("Previous close: ${number(q.previousClose)}")
-                            Text("Exchange: ${q.exchange ?: "Unknown"} · ${q.timezone ?: "Unknown timezone"}")
-                            if (q.previousCloseFallback) Text("Price is previous close, not a current trade.")
-                            QuoteTimes(q)
-                        }
-                        e?.let { Text("Last refresh attempt: ${dateTime(it.attemptedAt)} · ${it.outcome ?: "Not attempted"}") }
+                        StockDetail(detail, e, onBack = { screen = "Watchlist" })
                     }
                     "Add" -> AddScreen(store, onBack = { screen = "Watchlist" }, onSave = { quote ->
                         scope.launch { store.add(quote); FolioWidget().updateAll(context); screen = "Watchlist" }
@@ -250,24 +240,54 @@ fun FolioApp(requestedSymbol: Pair<String, Long>? = null, providedStore: Store? 
                     "Settings" -> {
                         Eyebrow("SMALL DETAILS. YOUR CHOICE.")
                         Title("Set your rhythm.")
-                        Text("Refresh interval · best effort, not a guarantee")
-                        Row { listOf("15", "30", "60").forEach { interval ->
-                            TextButton(onClick = {
-                                store.putString("interval", interval)
+                        Text("A companion that respects your battery.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        SettingsHeading("Refresh")
+                        SettingsGroup {
+                            Text("Background refresh", fontWeight = FontWeight.Medium)
+                            Text("Best effort while widgets are active", style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            ChoicePills(listOf("15", "30", "60"), interval, { "$it min" }) { option ->
+                                interval = option
+                                store.putString("interval", option)
                                 val ids = AppWidgetManager.getInstance(context).getAppWidgetIds(ComponentName(context, FolioWidgetReceiver::class.java))
-                                if (ids.isNotEmpty()) Refresh.schedule(context, interval.toLong())
-                                settingsMessage = "$interval-minute preference saved"
-                            }) { Text("$interval min") }
-                        } }
-                        if (settingsMessage.isNotEmpty()) Text(settingsMessage)
-                        Text("App theme")
-                        Row { listOf("System", "Light", "Dark").forEach { option ->
-                            TextButton(onClick = { theme = option; store.putString("appTheme", option) }) {
-                                Text(if (theme == option) "✓ $option" else option)
+                                if (ids.isNotEmpty()) Refresh.schedule(context, option.toLong())
+                                settingsMessage = "$option-minute preference saved"
                             }
-                        } }
-                        Text("Market provider: Yahoo chart endpoint (unofficial). It may be delayed, rate limited or unavailable. Requests disclose your IP and symbols to the provider.")
-                        Text("Android and your launcher can delay background updates. Prices are not guaranteed real time.")
+                            HorizontalDivider()
+                            Text("Conserves battery outside known sessions", fontWeight = FontWeight.Medium)
+                            Text("Uses recent provider session information when available; not an exchange calendar.",
+                                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        if (settingsMessage.isNotEmpty()) Text(settingsMessage)
+                        SettingsGroup {
+                            Text("Android may delay updates to save battery. The interval is a preference, not a guarantee.",
+                                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                        SettingsHeading("Appearance")
+                        SettingsGroup {
+                            Text("App theme", fontWeight = FontWeight.Medium)
+                            ChoicePills(listOf("System", "Light", "Dark"), theme, { it }) { option ->
+                                theme = option
+                                store.putString("appTheme", option)
+                            }
+                            HorizontalDivider()
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text("Show + / − signs")
+                                Text("Always on", color = MaterialTheme.colorScheme.primary)
+                            }
+                        }
+                        SettingsHeading("Your data")
+                        SettingsGroup {
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text("Market provider"); Text("Yahoo · unofficial", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            HorizontalDivider()
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                Text("Accounts"); Text("None", color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                        Text("The provider receives your IP and requested symbols. Prices may be delayed or unavailable.",
+                            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 }
             }
@@ -275,8 +295,289 @@ fun FolioApp(requestedSymbol: Pair<String, Long>? = null, providedStore: Store? 
     }
 }
 
+@Composable
+private fun WelcomeIllustration() {
+    val glow = MaterialTheme.colorScheme.primary.copy(alpha = 0.13f)
+    Box(
+        Modifier.fillMaxWidth().height(270.dp)
+            .background(Brush.radialGradient(listOf(glow, Color.Transparent))),
+        contentAlignment = Alignment.Center,
+    ) {
+        Box(
+            Modifier.offset(x = 12.dp, y = 16.dp).size(width = 190.dp, height = 220.dp)
+                .graphicsLayer { rotationZ = -7f }
+                .background(Color(0xff87977d).copy(alpha = 0.55f), RoundedCornerShape(24.dp)),
+        )
+        Column(
+            Modifier.size(width = 190.dp, height = 220.dp)
+                .graphicsLayer { rotationZ = -7f }
+                .background(graphite, RoundedCornerShape(24.dp)).padding(18.dp),
+            verticalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Column {
+                Text("MSFT", color = Color(0xfff1f6e8), fontWeight = FontWeight.Bold)
+                Text("Microsoft", color = Color(0xffb5c5b1), style = MaterialTheme.typography.bodySmall)
+            }
+            Column {
+                Text("489.93", color = Color(0xfff1f6e8), style = MaterialTheme.typography.headlineMedium)
+                Text("+0.99%", color = sage, style = MaterialTheme.typography.bodySmall)
+            }
+            Chart(listOf(1.0, 1.5, 1.3, 2.2, 1.9, 2.8, 2.6, 3.5, 3.1, 4.0, 3.8, 4.6), sage)
+            Text("Illustrative widget preview", color = Color(0xffb5c5b1), style = MaterialTheme.typography.labelSmall)
+        }
+    }
+}
+
+@Composable
+private fun WelcomeFeature(text: String) {
+    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+        Text("✓", color = MaterialTheme.colorScheme.primary)
+        Text(text, style = MaterialTheme.typography.bodyMedium)
+    }
+}
+
 @Composable private fun Title(text: String) = Text(text, style = MaterialTheme.typography.headlineMedium)
 @Composable private fun Eyebrow(text: String) = Text(text, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.secondary)
+
+@Composable
+private fun FolioNavigation(selected: String, onSelect: (String) -> Unit) {
+    val colors = MaterialTheme.colorScheme
+    Column(Modifier.fillMaxWidth().background(colors.background)) {
+        HorizontalDivider(color = colors.outlineVariant)
+        Row(Modifier.fillMaxWidth().windowInsetsPadding(WindowInsets.navigationBars).selectableGroup().padding(vertical = 5.dp)) {
+            listOf("Watchlist", "Widgets", "Data", "Settings").forEach { tab ->
+                val active = tab == selected
+                Column(
+                    Modifier.weight(1f).selectable(selected = active, role = Role.Tab, onClick = { onSelect(tab) })
+                        .padding(vertical = 4.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                ) {
+                    Box(
+                        Modifier.size(32.dp).background(
+                            if (active) Color(0xffcbe6af) else Color.Transparent, RoundedCornerShape(8.dp)),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        CompositionLocalProvider(LocalContentColor provides if (active) Color(0xff30462c) else colors.onSurfaceVariant) {
+                            NavigationIcon(tab)
+                        }
+                    }
+                    Text(tab, style = MaterialTheme.typography.labelSmall,
+                        color = if (active) colors.onBackground else colors.onSurfaceVariant,
+                        fontWeight = if (active) FontWeight.Bold else FontWeight.Normal)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun BackControl(onClick: () -> Unit) {
+    val color = MaterialTheme.colorScheme.onSurface
+    Box(
+        Modifier.size(48.dp).background(MaterialTheme.colorScheme.surfaceContainer, RoundedCornerShape(50))
+            .clickable(onClickLabel = "Back to watchlist", onClick = onClick)
+            .semantics { contentDescription = "Back to watchlist" },
+        contentAlignment = Alignment.Center,
+    ) {
+        Canvas(Modifier.size(20.dp)) {
+            val stroke = 1.7.dp.toPx()
+            drawLine(color, Offset(size.width * .8f, size.height * .5f), Offset(size.width * .2f, size.height * .5f), stroke, cap = StrokeCap.Round)
+            drawLine(color, Offset(size.width * .2f, size.height * .5f), Offset(size.width * .5f, size.height * .2f), stroke, cap = StrokeCap.Round)
+            drawLine(color, Offset(size.width * .2f, size.height * .5f), Offset(size.width * .5f, size.height * .8f), stroke, cap = StrokeCap.Round)
+        }
+    }
+}
+
+@Composable
+private fun StockDetail(symbol: String, entry: Entry?, onBack: () -> Unit) {
+    val quote = entry?.quote
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+        BackControl(onBack)
+        quote?.let {
+            Text(listOfNotNull(it.exchange, it.currency).joinToString(" · "),
+                Modifier.background(MaterialTheme.colorScheme.surfaceContainer, RoundedCornerShape(8.dp)).padding(horizontal = 10.dp, vertical = 6.dp),
+                style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+        }
+    }
+    Spacer(Modifier.height(8.dp))
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Title(quote?.name ?: symbol)
+            Text(symbol, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Box(Modifier.size(48.dp).background(MaterialTheme.colorScheme.surfaceContainer, RoundedCornerShape(12.dp)),
+            contentAlignment = Alignment.Center) {
+            Text(symbol.take(1), fontWeight = FontWeight.Bold, color = MaterialTheme.colorScheme.primary)
+        }
+    }
+    when {
+        entry == null -> Text("This stock is no longer in your watchlist.")
+        quote == null -> Text("No saved quote is available.", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        else -> {
+            Spacer(Modifier.height(4.dp))
+            Text(number(quote.price), style = MaterialTheme.typography.displaySmall)
+            Text(changeText(quote), color = changeColor(quote))
+            if (quote.points.size > 1) {
+                val axis = remember(quote.pointTimes, quote.points.size, quote.timezone) {
+                    chartTimeAxis(quote.pointTimes, quote.points.size, quote.timezone)
+                }
+                BoxWithConstraints(Modifier.fillMaxWidth()) {
+                    DetailChart(quote.points, axis?.fractions, changeColor(quote), Modifier.requiredWidth(maxWidth + 40.dp).height(170.dp))
+                }
+                if (axis != null) {
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                        axis.labels.forEach { label ->
+                            Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                    Text("Chart time · ${axis.timezone}", style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                } else {
+                    Text("Chart times unavailable in this saved snapshot. Refresh in Data to load time marks.",
+                        style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                    Text("1D · Intraday", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.primary)
+                    Text("Saved provider samples", style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            } else {
+                Text("Chart unavailable for this quote.", style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            Column(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceContainer, RoundedCornerShape(18.dp))
+                .padding(16.dp), verticalArrangement = Arrangement.spacedBy(14.dp)) {
+                Row(Modifier.fillMaxWidth()) {
+                    DetailMetric("Previous close", number(quote.previousClose), Modifier.weight(1f))
+                    DetailMetric("Currency", quote.currency ?: "Unknown", Modifier.weight(1f))
+                }
+                Row(Modifier.fillMaxWidth()) {
+                    DetailMetric("Exchange", quote.exchange ?: "Unknown", Modifier.weight(1f))
+                    DetailMetric("Exchange timezone", quote.timezone ?: "Unknown", Modifier.weight(1f))
+                }
+            }
+            if (quote.previousCloseFallback) Text("Price is previous close, not a current trade.")
+            QuoteTimes(quote)
+        }
+    }
+    entry?.let {
+        Text("Last refresh attempt: ${dateTime(it.attemptedAt)} · ${it.outcome ?: "Not attempted"}",
+            style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+@Composable
+private fun DetailMetric(label: String, value: String, modifier: Modifier = Modifier) {
+    Column(modifier.padding(end = 8.dp)) {
+        Text(label, style = MaterialTheme.typography.labelSmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(value, style = MaterialTheme.typography.bodyMedium)
+    }
+}
+
+@Composable
+private fun DetailChart(points: List<Double>, timeFractions: List<Float>?, color: Color, modifier: Modifier = Modifier) {
+    Canvas(modifier.semantics { contentDescription = "Intraday price chart" }) {
+        val fractions = chartFractions(points)
+        fun point(i: Int) = Offset(size.width * (timeFractions?.get(i) ?: (i.toFloat() / (points.size - 1))),
+            size.height * (.1f + .8f * (1 - fractions[i])))
+        val line = Path().apply {
+            moveTo(point(0).x, point(0).y)
+            for (i in 1 until points.size) lineTo(point(i).x, point(i).y)
+        }
+        val area = Path().apply {
+            addPath(line)
+            lineTo(size.width, size.height)
+            lineTo(0f, size.height)
+            close()
+        }
+        drawPath(area, Brush.verticalGradient(listOf(color.copy(alpha = .22f), Color.Transparent)))
+        drawPath(line, color, style = androidx.compose.ui.graphics.drawscope.Stroke(2.dp.toPx(), cap = StrokeCap.Round))
+    }
+}
+
+@Composable
+private fun ChoicePills(options: List<String>, selected: String, label: (String) -> String, onSelect: (String) -> Unit) {
+    Row(Modifier.fillMaxWidth().selectableGroup(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+        options.forEach { option ->
+            val active = option == selected
+            Box(Modifier.weight(1f).heightIn(min = 48.dp)
+                .background(if (active) MaterialTheme.colorScheme.secondaryContainer else Color.Transparent, RoundedCornerShape(12.dp))
+                .selectable(selected = active, role = Role.RadioButton, onClick = { onSelect(option) }),
+                contentAlignment = Alignment.Center) {
+                Text(label(option), style = MaterialTheme.typography.labelMedium,
+                    color = if (active) MaterialTheme.colorScheme.onSecondaryContainer else MaterialTheme.colorScheme.onSurfaceVariant,
+                    fontWeight = if (active) FontWeight.SemiBold else FontWeight.Normal, maxLines = 1)
+            }
+        }
+    }
+}
+
+@Composable
+private fun SettingsHeading(text: String) {
+    Text(text, Modifier.padding(top = 8.dp), style = MaterialTheme.typography.titleSmall, fontWeight = FontWeight.Bold)
+}
+
+@Composable
+private fun SettingsGroup(content: @Composable ColumnScope.() -> Unit) {
+    Column(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceContainer, RoundedCornerShape(18.dp))
+        .padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp), content = content)
+}
+
+@Composable
+fun WidgetDesigner(
+    entries: List<Entry>,
+    config: WidgetConfig,
+    size: String,
+    onSizeChange: (String) -> Unit,
+    onConfigChange: (WidgetConfig) -> Unit,
+) {
+    var choosing by remember { mutableStateOf(false) }
+    ChoicePills(listOf("Compact", "Wide", "Watchlist"), size, { it }, onSizeChange)
+    val layout = when (size) { "Watchlist" -> WidgetLayout.WATCHLIST; "Wide" -> WidgetLayout.WIDE; else -> WidgetLayout.COMPACT }
+    WidgetPreview(presentWidget(config, entries, layout), config.theme, config.opacity.toFloat())
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+        Text("Stocks", style = MaterialTheme.typography.bodyMedium)
+        TextButton(onClick = { choosing = !choosing }) {
+            Text(if (choosing) "Done" else "${config.symbols.firstOrNull() ?: "None"} · Change")
+        }
+    }
+    if (choosing) {
+        Text("Choose and order stocks · first is featured", style = MaterialTheme.typography.bodySmall)
+        val available = entries.map { it.symbol }
+        (config.symbols.filter { it in available } + available.filterNot { it in config.symbols }).forEach { symbol ->
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Checkbox(checked = symbol in config.symbols, onCheckedChange = { checked ->
+                    onConfigChange(config.copy(symbols = if (checked) config.symbols + symbol else config.symbols - symbol))
+                })
+                Text(symbol, Modifier.weight(1f))
+                TextButton(enabled = symbol in config.symbols, onClick = { onConfigChange(config.copy(symbols = moveSymbol(config.symbols, symbol, -1))) }) { Text("↑") }
+                TextButton(enabled = symbol in config.symbols, onClick = { onConfigChange(config.copy(symbols = moveSymbol(config.symbols, symbol, 1))) }) { Text("↓") }
+            }
+        }
+        if (entries.isEmpty()) Text("Follow a stock in Folio first.", style = MaterialTheme.typography.bodySmall)
+    }
+    HorizontalDivider()
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+        Text("Appearance", style = MaterialTheme.typography.bodyMedium)
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            listOf("Graphite" to graphite, "Sage" to Color(0xffe2edcf), "Paper" to Color(0xfff5f3eb)).forEach { (name, color) ->
+                Box(Modifier.size(40.dp).clickable { onConfigChange(config.copy(theme = name)) }
+                    .semantics { contentDescription = "$name widget theme${if (config.theme == name) ", selected" else ""}" },
+                    contentAlignment = Alignment.Center) {
+                    Box(Modifier.size(26.dp).border(if (config.theme == name) 2.dp else 0.dp,
+                        MaterialTheme.colorScheme.primary, RoundedCornerShape(50)).padding(3.dp)
+                        .background(color, RoundedCornerShape(50)))
+                }
+            }
+        }
+    }
+    HorizontalDivider()
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+        Text("Background opacity: ${config.opacity}%", Modifier.weight(1f), style = MaterialTheme.typography.bodyMedium)
+        Slider(value = config.opacity.toFloat(), onValueChange = { onConfigChange(config.copy(opacity = it.toInt())) },
+            valueRange = 35f..100f, modifier = Modifier.width(120.dp))
+    }
+    Text("Saved data · no network request. Quote is the stock price time; fetched is the last successful refresh. Widget times use your device time zone; full dates are in Data.", style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant)
+}
 
 @Composable
 private fun AddScreen(store: Store, onBack: () -> Unit, onSave: (Quote) -> Unit) {
@@ -285,7 +586,10 @@ private fun AddScreen(store: Store, onBack: () -> Unit, onSave: (Quote) -> Unit)
     var quote by remember { mutableStateOf<Quote?>(null) }
     var error by remember { mutableStateOf("") }
     var loading by remember { mutableStateOf(false) }
-    TextButton(onClick = onBack) { Text("← Watchlist") }
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.SpaceBetween) {
+        BackControl(onBack)
+        Eyebrow("GROW YOUR SHORTLIST")
+    }
     Title("Find your next perspective.")
     Text("Enter an exact stock symbol to preview it.")
     OutlinedTextField(input, onValueChange = { input = it; quote = null; error = "" }, label = { Text("Symbol") }, singleLine = true, enabled = !loading)
@@ -381,54 +685,91 @@ private fun ReviewCard(e: Entry) {
 private fun WidgetPreview(presentation: WidgetPresentation, palette: String, opacity: Float) {
     val bg = when (palette) { "Sage" -> Color(0xffe2edcf); "Paper" -> Color(0xfff5f3eb); else -> graphite }
     val fg = if (palette == "Graphite") Color(0xfff1f6e8) else Color(0xff263723)
-    Box(Modifier.fillMaxWidth().background(Color(0xffc9cec0), RoundedCornerShape(24.dp)).padding(16.dp),
+    val muted = if (palette == "Graphite") Color(0xff9bad9f) else Color(0xff687a5f)
+    Box(Modifier.fillMaxWidth().background(Brush.linearGradient(listOf(Color(0xffd0dbbf), Color(0xffa4b498))), RoundedCornerShape(24.dp)).padding(20.dp),
         contentAlignment = Alignment.Center) {
     Column(Modifier.widthIn(max = if (presentation.layout == WidgetLayout.COMPACT) 200.dp else 360.dp)
-        .fillMaxWidth().defaultMinSize(minHeight = if (presentation.layout == WidgetLayout.WATCHLIST) 280.dp else 180.dp)
-        .background(bg.copy(alpha = opacity / 100f), RoundedCornerShape(24.dp)).padding(16.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        .fillMaxWidth().height(if (presentation.layout == WidgetLayout.WATCHLIST) 400.dp else 210.dp)
+        .background(bg.copy(alpha = opacity / 100f), RoundedCornerShape(24.dp)).padding(horizontal = 16.dp, vertical = 12.dp)) {
         val row = presentation.rows.firstOrNull()
-        if (row == null) Text("A little space for your stocks.\nFollow a stock in Folio.", color = fg)
+        Column(Modifier.weight(1f)) {
+        if (row == null) {
+            Text("Your watchlist", color = fg, fontSize = 12.sp, lineHeight = 14.sp, fontWeight = FontWeight.Bold)
+            Text("A little space for your stocks.", color = fg, fontSize = 15.sp, lineHeight = 18.sp)
+            Text("Follow a stock in Folio.", color = muted, fontSize = 11.sp, lineHeight = 13.sp)
+        }
         else if (presentation.layout == WidgetLayout.WATCHLIST) {
-            Text("Your watchlist", color = fg, fontWeight = FontWeight.Bold)
+            Text("Your watchlist", color = fg, fontSize = 12.sp, lineHeight = 14.sp, fontWeight = FontWeight.Bold)
             presentation.rows.forEach { item ->
                 val accent = previewAccent(item.negative, palette)
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalAlignment = Alignment.CenterVertically) {
+                Row(Modifier.fillMaxWidth().padding(top = 3.dp), verticalAlignment = Alignment.CenterVertically) {
                     Column(Modifier.weight(1f)) {
-                        Text(item.symbol, color = fg, fontWeight = FontWeight.Bold)
-                        Text(item.price, color = fg, style = MaterialTheme.typography.bodySmall)
-                        Text(item.change, color = accent, style = MaterialTheme.typography.bodySmall)
+                        Text(item.symbol, color = fg, fontSize = 11.sp, lineHeight = 13.sp, fontWeight = FontWeight.Bold)
+                        Text(item.name, color = muted, fontSize = 9.sp, lineHeight = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     }
-                    Box(Modifier.width(44.dp)) { Chart(item.points, accent) }
+                    Box(Modifier.width(40.dp)) { WidgetChart(item.points, accent, 24) }
+                    Column(Modifier.width(72.dp), horizontalAlignment = Alignment.End) {
+                        Text(item.price, color = fg, fontSize = 12.sp, lineHeight = 14.sp, maxLines = 1)
+                        Text(item.percentChange, color = accent, fontSize = 9.sp, lineHeight = 11.sp)
+                    }
                 }
-                Text(item.quoteTime, fontSize = 11.sp, color = fg)
-                Text(item.fetchedAt, fontSize = 11.sp, color = fg)
-                item.status?.let { Text(it, fontSize = 11.sp, color = fg) }
+                Text(item.quoteTime, fontSize = 9.sp, lineHeight = 11.sp, color = muted, maxLines = 1)
+                Text(item.fetchedAt, fontSize = 9.sp, lineHeight = 11.sp, color = muted, maxLines = 1)
+                item.status?.let { Text(it, fontSize = 9.sp, lineHeight = 11.sp, color = muted, maxLines = 1) }
                 HorizontalDivider(color = fg.copy(alpha = 0.12f))
             }
         } else {
-            Row(horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(row.symbol, color = fg, fontWeight = FontWeight.Bold)
-                    Text(row.name, color = fg, style = MaterialTheme.typography.bodySmall, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    Text(row.price, fontSize = 24.sp, color = fg, fontFamily = FontFamily.Monospace)
-                    Text(row.change, color = previewAccent(row.negative, palette), style = MaterialTheme.typography.bodySmall)
+            if (presentation.layout == WidgetLayout.WIDE) {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text(row.symbol, fontSize = 12.sp, lineHeight = 14.sp, color = fg, fontWeight = FontWeight.Bold)
+                    Text(" / ${row.name}", Modifier.weight(1f), fontSize = 10.sp, lineHeight = 12.sp, color = muted,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    row.exchange?.let { Text(it, fontSize = 9.sp, lineHeight = 11.sp, color = muted, maxLines = 1) }
+                }
+            } else {
+                Text(row.symbol, fontSize = 12.sp, lineHeight = 14.sp, color = fg, fontWeight = FontWeight.Bold)
+                Text(row.name, fontSize = 10.sp, lineHeight = 12.sp, color = muted, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            Spacer(Modifier.height(8.dp))
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Row(verticalAlignment = Alignment.Bottom) {
+                        Text(row.price, fontSize = 28.sp, lineHeight = 32.sp, color = fg, fontWeight = FontWeight.Medium, maxLines = 1)
+                        row.currency?.let { Text(" $it", fontSize = 10.sp, lineHeight = 12.sp, color = muted, maxLines = 1) }
+                    }
+                    Text(row.change, color = previewAccent(row.negative, palette), fontSize = 10.sp, lineHeight = 12.sp, maxLines = 1)
                 }
                 if (presentation.layout == WidgetLayout.WIDE && row.points.size > 1)
-                    Box(Modifier.weight(0.65f)) { Chart(row.points, previewAccent(row.negative, palette)) }
+                    Box(Modifier.width(110.dp)) { WidgetChart(row.points, previewAccent(row.negative, palette), 54) }
             }
-            Text(row.quoteTime, fontSize = 11.sp, color = fg)
-            Text(row.fetchedAt, fontSize = 11.sp, color = fg)
-            row.status?.let { Text(it, fontSize = 11.sp, color = fg) }
-            row.lastAttempt?.let { Text(it, fontSize = 11.sp, color = fg) }
+            if (presentation.layout == WidgetLayout.COMPACT && row.points.size > 1)
+                Box(Modifier.fillMaxWidth()) { WidgetChart(row.points, previewAccent(row.negative, palette), 39) }
         }
-        Row(Modifier.fillMaxWidth().heightIn(min = 48.dp), horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically) {
-            Text("Folio", color = fg, style = MaterialTheme.typography.bodySmall)
-            Text("↻ Refresh  ·  Settings", fontSize = 11.sp, color = fg)
+        }
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                if (presentation.layout != WidgetLayout.WATCHLIST) row?.let {
+                    Text(it.quoteTime, fontSize = 9.sp, lineHeight = 11.sp, color = muted, maxLines = 1)
+                    Text(it.fetchedAt, fontSize = 9.sp, lineHeight = 11.sp, color = muted, maxLines = 1)
+                    it.status?.let { status -> Text(status, fontSize = 9.sp, lineHeight = 11.sp, color = muted, maxLines = 1) }
+                }
+            }
+            Box(Modifier.size(48.dp), contentAlignment = Alignment.Center) {
+                val color = previewAccent(false, palette)
+                Image(remember(color) { refreshIcon(color.toArgb()).asImageBitmap() }, contentDescription = "Refresh preview",
+                    modifier = Modifier.size(16.dp))
+            }
         }
     }
     }
+}
+
+@Composable
+private fun WidgetChart(points: List<Double>, color: Color, height: Int) {
+    if (points.size < 2) return
+    val bitmap = remember(points, color) { sparkline(points, color.toArgb()).asImageBitmap() }
+    Image(bitmap, contentDescription = "Intraday price chart", contentScale = ContentScale.FillBounds,
+        modifier = Modifier.fillMaxWidth().height(height.dp))
 }
 
 private fun previewAccent(negative: Boolean, palette: String): Color =
@@ -436,12 +777,11 @@ private fun previewAccent(negative: Boolean, palette: String): Color =
     else { if (palette == "Graphite") sage else Color(0xff506e37) }
 
 @Composable
-private fun Chart(points: List<Double>, color: Color) {
+private fun Chart(points: List<Double>, color: Color, height: Int = 45) {
     if (points.size < 2) return
-    Canvas(Modifier.fillMaxWidth().height(45.dp)) {
-        val min = points.min()
-        val range = (points.max() - min).takeIf { it > 0 } ?: 1.0
-        fun point(i: Int) = Offset(size.width * i / (points.size - 1), size.height * (1 - ((points[i] - min) / range).toFloat()))
+    Canvas(Modifier.fillMaxWidth().height(height.dp)) {
+        val fractions = chartFractions(points)
+        fun point(i: Int) = Offset(size.width * i / (points.size - 1), size.height * (1 - fractions[i]))
         for (i in 1 until points.size) drawLine(color, point(i - 1), point(i), strokeWidth = 2.dp.toPx())
     }
 }

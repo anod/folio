@@ -22,6 +22,7 @@ data class Quote(
     val previousCloseFallback: Boolean = false,
     val regularStart: Long? = null,
     val regularEnd: Long? = null,
+    val pointTimes: List<Long> = emptyList(),
 ) {
     val change: Double? get() = previousClose?.takeUnless { previousCloseFallback }?.let { price - it }
     val percent: Double? get() = previousClose?.takeUnless { previousCloseFallback }?.takeIf { it != 0.0 }?.let { (price - it) / it * 100 }
@@ -82,11 +83,16 @@ fun parseQuote(body: String, requested: String, fetchedAt: Long): Quote {
         val closes = quotes?.optJSONArray("close")
         val times = result.optJSONArray("timestamp")
         val points = mutableListOf<Double>()
+        val pointTimes = mutableListOf<Long>()
         if (closes != null && times != null) {
             for (i in 0 until minOf(closes.length(), times.length())) {
                 if (!times.isNull(i) && !closes.isNull(i)) {
                     val value = closes.optDouble(i, Double.NaN)
-                    if (value.isFinite() && value > 0) points.add(value)
+                    val time = times.optLong(i, 0).takeIf { it in 1..Long.MAX_VALUE / 1000 }?.times(1000)
+                    if (value.isFinite() && value > 0 && time != null && (pointTimes.isEmpty() || time > pointTimes.last())) {
+                        points.add(value)
+                        pointTimes.add(time)
+                    }
                 }
             }
         }
@@ -109,6 +115,7 @@ fun parseQuote(body: String, requested: String, fetchedAt: Long): Quote {
             previousCloseFallback = live == null,
             regularStart = start,
             regularEnd = end,
+            pointTimes = pointTimes.takeLast(200),
         )
     } catch (e: MarketException) {
         throw e

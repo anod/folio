@@ -9,13 +9,15 @@ fun decodeEntries(json: String): List<Entry> {
         val obj = array.getJSONObject(i)
         val quote = obj.optJSONObject("quote")?.let { q ->
             val points = q.optJSONArray("points") ?: JSONArray()
+            val pointTimes = q.optJSONArray("pointTimes") ?: JSONArray()
             Quote(q.getString("symbol"), q.getString("name"), q.optString("currency").ifEmpty { null },
                 q.optString("exchange").ifEmpty { null }, q.optString("timezone").ifEmpty { null },
                 q.getDouble("price"), if (q.isNull("previous")) null else q.getDouble("previous"),
                 if (q.isNull("quoteTime")) null else q.getLong("quoteTime"), q.getLong("fetchedAt"),
                 (0 until points.length()).map { points.getDouble(it) }, q.optBoolean("fallback"),
                 if (q.isNull("regularStart")) null else q.getLong("regularStart"),
-                if (q.isNull("regularEnd")) null else q.getLong("regularEnd"))
+                if (q.isNull("regularEnd")) null else q.getLong("regularEnd"),
+                (0 until pointTimes.length()).map { pointTimes.getLong(it) })
         }
         Entry(obj.getString("symbol"), quote,
             if (obj.isNull("attemptedAt")) null else obj.getLong("attemptedAt"),
@@ -40,6 +42,7 @@ fun encodeEntries(entries: List<Entry>): String {
                 .put("previous", q.previousClose ?: JSONObject.NULL)
                 .put("quoteTime", q.quoteTime ?: JSONObject.NULL).put("fetchedAt", q.fetchedAt)
                 .put("points", JSONArray(q.points)).put("fallback", q.previousCloseFallback)
+                .put("pointTimes", JSONArray(q.pointTimes))
                 .put("regularStart", q.regularStart ?: JSONObject.NULL).put("regularEnd", q.regularEnd ?: JSONObject.NULL))
         }
         array.put(o)
