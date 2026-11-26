@@ -37,8 +37,25 @@ data class Entry(
     val failures: Int = 0,
 )
 
+enum class ChartRange(val label: String, val description: String, val providerRange: String, val interval: String) {
+    DAY("1D", "Intraday", "1d", "5m"),
+    WEEK("1W", "5 trading days", "5d", "1h"),
+    MONTH("1M", "1 month", "1mo", "1d"),
+    THREE_MONTHS("3M", "3 months", "3mo", "1d"),
+    YEAR("1Y", "1 year", "1y", "1wk"),
+}
+
+data class ChartSeries(
+    val points: List<Double>,
+    val pointTimes: List<Long>,
+    val timezone: String?,
+    val fetchedAt: Long,
+)
+
 interface MarketDataProvider {
     suspend fun fetch(symbol: String): Quote
+    suspend fun fetchHistory(symbol: String, range: ChartRange): ChartSeries =
+        throw MarketException("Historical charts are not available from this provider.")
 }
 
 class MarketException(message: String, val retryable: Boolean = false, val retryAfter: Long? = null, val rateLimited: Boolean = false) : Exception(message)
@@ -125,10 +142,20 @@ fun parseQuote(body: String, requested: String, fetchedAt: Long): Quote {
 }
 
 class YahooProvider : MarketDataProvider {
-    override suspend fun fetch(symbol: String): Quote = withContext(Dispatchers.IO) {
+    override suspend fun fetch(symbol: String): Quote = request(symbol, ChartRange.DAY)
+
+    override suspend fun fetchHistory(symbol: String, range: ChartRange): ChartSeries {
+        val quote = request(symbol, range)
+        if (quote.points.size < 2 || quote.pointTimes.size != quote.points.size) {
+            throw MarketException("No chart data is available for ${range.label}.")
+        }
+        return ChartSeries(quote.points, quote.pointTimes, quote.timezone, quote.fetchedAt)
+    }
+
+    private suspend fun request(symbol: String, range: ChartRange): Quote = withContext(Dispatchers.IO) {
         val normalized = normalizeSymbol(symbol)
         val encoded = URLEncoder.encode(normalized, StandardCharsets.UTF_8.name())
-        val connection = URL("https://query1.finance.yahoo.com/v8/finance/chart/$encoded?range=1d&interval=5m")
+        val connection = URL("https://query1.finance.yahoo.com/v8/finance/chart/$encoded?range=${range.providerRange}&interval=${range.interval}")
             .openConnection() as HttpURLConnection
         try {
             connection.connectTimeout = 10_000

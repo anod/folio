@@ -7,6 +7,7 @@ import android.content.Intent
 import android.content.ComponentName
 import androidx.glance.appwidget.GlanceAppWidgetManager
 import com.folio.app.market.Store
+import com.folio.app.market.scheduleTradingStatus
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
@@ -23,6 +24,7 @@ class PinResultReceiver : BroadcastReceiver() {
                 Store.get(context).saveWidgetConfig(id, WidgetConfig.decode(encoded))
                 val glanceId = GlanceAppWidgetManager(context).getGlanceIdBy(id)
                 FolioWidget().update(context, glanceId)
+                scheduleTradingStatus(context)
             } finally {
                 pending.finish()
             }

@@ -2,6 +2,7 @@ package com.folio.app.widget
 
 import com.folio.app.market.Entry
 import com.folio.app.market.Quote
+import com.folio.app.market.TradingStatus
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -14,6 +15,8 @@ class WidgetPresentationTest {
         val second = WidgetConfig(listOf("C"), "Graphite", 100)
         assertEquals(first, WidgetConfig.decode(first.encode()))
         assertEquals(second, WidgetConfig.decode(second.encode()))
+        assertEquals("System", WidgetConfig.decode(WidgetConfig(listOf("A")).encode()).theme)
+        assertEquals("Graphite", WidgetConfig.decode("""{"symbols":["A"],"theme":"Graphite"}""").theme)
         assertEquals(listOf("A", "B"), moveSymbol(first.symbols, "A", -1))
         assertEquals(listOf("B", "A"), first.symbols)
         assertEquals(listOf("B", "A"), moveSymbol(first.symbols, "B", -1))
@@ -40,6 +43,16 @@ class WidgetPresentationTest {
         val row = presentWidget(WidgetConfig(listOf("A")), listOf(fallback), WidgetLayout.COMPACT).rows.single()
         assertTrue(row.status!!.contains("Previous close, not a current trade"))
         assertTrue(row.status.contains("Network unavailable"))
+    }
+
+    @Test fun tradingStatusFollowsTheSuppliedClock() {
+        val saved = entry("A")
+        val session = saved.copy(quote = saved.quote!!.copy(regularStart = 30_000, regularEnd = 600_000))
+        val entries = listOf(session, entry("B"))
+        val during = presentWidget(WidgetConfig(listOf("A", "B")), entries, WidgetLayout.WATCHLIST, now = 300_000).rows
+        assertEquals(listOf(TradingStatus.ACTIVE, TradingStatus.UNKNOWN), during.map { it.trading })
+        val after = presentWidget(WidgetConfig(listOf("A")), entries, WidgetLayout.COMPACT, now = 600_000).rows.single()
+        assertEquals(TradingStatus.UNKNOWN, after.trading)
     }
 
     @Test fun fallingPricesKeepTheirSignInEveryLayout() {
